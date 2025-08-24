@@ -1,7 +1,7 @@
 {
 	"id": "obsyncth",
 	"name": "Obsyncth",
-	"version": "1.5.5",
+	"version": "1.5.6",
 	"minAppVersion": "0.15.0",
 	"description": "Seamless Obsidian-Syncthing integration with cross-platform vault synchronization, automatic binary management, and real-time status monitoring",
 	"author": "Reza Mir",

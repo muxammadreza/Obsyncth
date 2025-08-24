@@ -1,6 +1,6 @@
 {
 	"name": "obsyncth",
-	"version": "1.5.5",
+	"version": "1.5.6",
 	"description": "Seamless Obsidian-Syncthing integration plugin enabling cross-platform vault synchronization with automatic binary management and real-time status monitoring",
 	"main": "main.js",
 	"scripts": {

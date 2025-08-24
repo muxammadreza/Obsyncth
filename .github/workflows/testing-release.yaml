@@ -1,5 +1,6 @@
 name: Testing Release
 
+# This workflow creates beta releases for testing from the dev branch
 on:
   push:
     branches:
