@@ -275,10 +275,10 @@ class SyncthingMonitor extends EventEmitter {
 		// Parse URL for hostname and port
 		const url = new URL(this.baseUrl);
 		
-		// Use IPv6 localhost if hostname is localhost/127.0.0.1
+		// Use IPv4 localhost to avoid IPv6 connection issues
 		let hostname = url.hostname;
-		if (hostname === 'localhost' || hostname === '127.0.0.1') {
-			hostname = '::1'; // Try IPv6 first, fallback in request error handler
+		if (hostname === 'localhost') {
+			hostname = '127.0.0.1'; // Use IPv4 instead of IPv6
 		}
 		
 		const options = {
@@ -418,10 +418,10 @@ class SyncthingMonitor extends EventEmitter {
 		// Parse URL for hostname and port
 		const url = new URL(this.baseUrl);
 
-		// Use IPv6 localhost if hostname is localhost/127.0.0.1
+		// Use IPv4 localhost to avoid IPv6 connection issues
 		let hostname = url.hostname;
-		if (hostname === 'localhost' || hostname === '127.0.0.1') {
-			hostname = '::1'; // Try IPv6 first, fallback in request error handler
+		if (hostname === 'localhost') {
+			hostname = '127.0.0.1'; // Use IPv4 instead of IPv6
 		}
 
 		const options = {
@@ -2142,15 +2142,13 @@ export default class Obsyncth extends Plugin {
 				return;
 			}
 
-			const url = new URL(this.getSyncthingURL());
-			
-			// Use IPv6 localhost if hostname is localhost/127.0.0.1
-			let hostname = url.hostname;
-			if (hostname === 'localhost' || hostname === '127.0.0.1') {
-				hostname = '::1'; // Try IPv6 first, fallback in request error handler
-			}
-			
-			const options = {
+		const url = new URL(this.getSyncthingURL());
+		
+		// Use IPv4 localhost
+		let hostname = url.hostname;
+		if (hostname === 'localhost' || hostname === '::1') {
+			hostname = '127.0.0.1'; // Force IPv4 for localhost
+		}			const options = {
 				hostname: hostname,
 				port: parseInt(url.port) || 8384,
 				path: `/rest/db/status?folder=${this.settings.vaultFolderID}`,
