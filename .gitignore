@@ -25,6 +25,7 @@ data.json
 
 # Test files and temporary data
 test-*.js
+Syncthing binary-config/syncthing-config/
 syncthing-config/
 syncthing.log
 COMPLETION_SUMMARY.md

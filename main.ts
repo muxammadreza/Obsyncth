@@ -721,8 +721,8 @@ export default class Obsyncth extends Plugin {
 
 				const executablePath = this.getSyncthingExecutablePath();
 				
-				// Set up configuration directory
-				const configDir = `${this.getPluginAbsolutePath()}syncthing-config`;
+				// Set up configuration directory inside the Syncthing binary-config folder
+				const configDir = `${this.getPluginAbsolutePath()}Syncthing binary-config/syncthing-config`;
 				if (typeof require !== 'undefined') {
 					const fs = require('fs');
 					if (!fs.existsSync(configDir)) {
@@ -2672,7 +2672,7 @@ class SettingTab extends PluginSettingTab {
 				if (typeof require !== 'undefined') {
 					const fs = require('fs');
 					const path = require('path');
-					const configDir = `${this.plugin.getPluginAbsolutePath()}syncthing-config`;
+					const configDir = `${this.plugin.getPluginAbsolutePath()}Syncthing binary-config/syncthing-config`;
 					
 					if (fs.existsSync(configDir)) {
 						fs.rmSync(configDir, { recursive: true, force: true });
