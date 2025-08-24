@@ -1,0 +1,37 @@
+{
+	"name": "obsyncth",
+	"version": "1.5.5",
+	"description": "Seamless Obsidian-Syncthing integration plugin enabling cross-platform vault synchronization with automatic binary management and real-time status monitoring",
+	"main": "main.js",
+	"scripts": {
+		"dev": "node esbuild.config.mjs",
+		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+		"version": "node version-bump.mjs && git add manifest.json versions.json",
+		"release": "./scripts/release.sh",
+		"release:patch": "./scripts/release.sh patch",
+		"release:minor": "./scripts/release.sh minor",
+		"release:major": "./scripts/release.sh major"
+	},
+	"keywords": ["obsidian", "plugin", "syncthing", "sync", "cross-platform", "mobile", "vault", "backup"],
+	"author": {
+		"name": "Reza Mir",
+		"email": "rmirbast@gmail.com",
+		"url": "https://github.com/muxammadreza"
+	},
+	"license": "MIT",
+	"devDependencies": {
+		"@types/dockerode": "^3.3.24",
+		"@types/node": "^16.18.86",
+		"@typescript-eslint/eslint-plugin": "5.29.0",
+		"@typescript-eslint/parser": "5.29.0",
+		"builtin-modules": "3.3.0",
+		"esbuild": "0.17.3",
+		"obsidian": "latest",
+		"tslib": "2.4.0",
+		"typescript": "^4.7.4"
+	},
+	"dependencies": {
+		"axios": "^1.6.7",
+		"tree-kill": "^1.2.2"
+	}
+}

@@ -1,0 +1,38 @@
+# Obsyncth Docker Configuration
+# Copyright (c) 2024-2025 Reza Mir
+# 
+# Docker Compose setup for containerized Syncthing with CORS proxy
+
+version: '3.8'
+
+services:
+  nginx:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: obsyncth_cors_proxy
+    restart: unless-stopped
+    ports:
+      - 8380:80  
+  syncthing:
+    image: syncthing/syncthing:latest
+    container_name: obsyncth_syncthing
+    hostname: obsyncth
+    user: 1001:1001
+    restart: unless-stopped
+    env_file:
+      - path: ./.env
+        required: true
+    depends_on:
+      - nginx
+    environment:
+      - PUID=1001
+      - PGID=1001
+    volumes:
+      - ${VAULT_PATH}:/var/syncthing/data/obsidian/vault
+      - ${SYNCTHING_CONFIG_PATH}:/var/syncthing/config
+    ports:
+      - 8384:8384 # Web UI
+      - 22000:22000/tcp # TCP file transfers
+      - 22000:22000/udp # QUIC file transfers
+      - 21027:21027/udp # Receive local discovery broadcasts
