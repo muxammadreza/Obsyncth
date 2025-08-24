@@ -721,12 +721,38 @@ export default class Obsyncth extends Plugin {
 
 				const executablePath = this.getSyncthingExecutablePath();
 				
-				// Set up configuration directory inside the Syncthing binary-config folder
-				const configDir = `${this.getPluginAbsolutePath()}Syncthing binary-config/syncthing-config`;
+				// Ensure the complete directory structure exists
+				const pluginPath = this.getPluginAbsolutePath();
+				const binaryConfigDir = `${pluginPath}Syncthing binary-config`;
+				const configDir = `${binaryConfigDir}/syncthing-config`;
+				
 				if (typeof require !== 'undefined') {
 					const fs = require('fs');
-					if (!fs.existsSync(configDir)) {
-						fs.mkdirSync(configDir, { recursive: true });
+					const path = require('path');
+					
+					try {
+						// First ensure the parent binary-config directory exists
+						if (!fs.existsSync(binaryConfigDir)) {
+							console.log(`Creating Syncthing binary-config directory: ${binaryConfigDir}`);
+							fs.mkdirSync(binaryConfigDir, { recursive: true });
+						}
+						
+						// Then ensure the config subdirectory exists
+						if (!fs.existsSync(configDir)) {
+							console.log(`Creating syncthing config directory: ${configDir}`);
+							fs.mkdirSync(configDir, { recursive: true });
+						}
+						
+						// Verify directory creation was successful
+						if (!fs.existsSync(configDir)) {
+							throw new Error(`Failed to create config directory: ${configDir}`);
+						}
+						
+						console.log(`Syncthing config directory ready: ${configDir}`);
+					} catch (dirError) {
+						console.error('Failed to create Syncthing directories:', dirError);
+						new Notice(`Failed to create Syncthing directories: ${dirError.message}`, 10000);
+						return;
 					}
 				}
 				
@@ -755,6 +781,9 @@ export default class Obsyncth extends Plugin {
 					await new Promise(resolve => setTimeout(resolve, 1000));
 				}
 				
+				// Give filesystem a moment to ensure directory is ready
+				await new Promise(resolve => setTimeout(resolve, 100));
+				
 				// Start Syncthing with configuration directory
 				const args = [
 					'--home', configDir,
@@ -763,6 +792,7 @@ export default class Obsyncth extends Plugin {
 				];
 				
 				console.log(`Starting Syncthing with args: ${args.join(' ')}`);
+				console.log(`Using config directory: ${configDir}`);
 				
 				try {
 					this.syncthingInstance = spawn(executablePath, args);
@@ -777,7 +807,16 @@ export default class Obsyncth extends Plugin {
 				});
 
 				this.syncthingInstance.stderr.on('data', (data: any) => {
-					console.error(`stderr: ${data}`);
+					const errorMsg = data.toString();
+					console.error(`stderr: ${errorMsg}`);
+					
+					// Check for config directory related errors
+					if (errorMsg.includes('failed to create config dir') || 
+						errorMsg.includes('cannot create directory') || 
+						errorMsg.includes('permission denied')) {
+						console.error('Syncthing config directory error detected');
+						new Notice(`Syncthing config directory error: ${errorMsg.trim()}`, 10000);
+					}
 				});
 
 				this.syncthingInstance.on('exit', (code: any) => {
