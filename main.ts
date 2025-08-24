@@ -1516,8 +1516,8 @@ export default class Obsyncth extends Plugin {
 			const fs = require('fs');
 			const path = require('path');
 			
-			// Create syncthing directory if it doesn't exist
-			const syncthingDir = path.join(this.getPluginAbsolutePath(), 'syncthing');
+			// Create the correct binary directory that matches getSyncthingExecutablePath()
+			const syncthingDir = path.join(this.getPluginAbsolutePath(), 'Syncthing binary-config');
 			if (!fs.existsSync(syncthingDir)) {
 				fs.mkdirSync(syncthingDir, { recursive: true });
 			}
