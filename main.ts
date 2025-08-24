@@ -622,8 +622,24 @@ export default class Obsyncth extends Plugin {
 
 	startStatusMonitoring() {
 		if (!this.settings.syncthingApiKey) {
-			this.setStatusIcon('❌');
-			console.log('No API key set, skipping status monitoring');
+			this.setStatusIcon('⚠️');
+			console.log('No API key set. Syncthing is running but requires configuration.');
+			
+			// Still try to monitor basic connectivity for first-run scenarios
+			const baseUrl = this.getSyncthingURL();
+			this.monitor.startMonitoring(this.settings, this.setStatusIcon, baseUrl);
+			
+			// Show a helpful notice for first-time users
+			new Notice('Syncthing is running! Please configure your API key in the plugin settings to enable full functionality.', 8000);
+			
+			// Auto-open Syncthing GUI for first-time setup if no API key is configured
+			setTimeout(() => {
+				if (!this.settings.syncthingApiKey) {
+					const url = this.getSyncthingURL();
+					console.log(`Opening Syncthing GUI for first-time setup: ${url}`);
+					// Don't auto-open to avoid being intrusive, just log the URL
+				}
+			}, 3000);
 			return;
 		}
 
@@ -817,6 +833,22 @@ export default class Obsyncth extends Plugin {
 						console.error('Syncthing config directory error detected');
 						new Notice(`Syncthing config directory error: ${errorMsg.trim()}`, 10000);
 					}
+					
+					// Check for web interface / API errors
+					if (errorMsg.includes('panic') || 
+						errorMsg.includes('cannot bind') || 
+						errorMsg.includes('address already in use') ||
+						errorMsg.includes('failed to start web UI')) {
+						console.error('Syncthing web interface error detected');
+						new Notice(`Syncthing web interface error: ${errorMsg.trim()}`, 10000);
+					}
+					
+					// Check for database/config corruption
+					if (errorMsg.includes('database') && errorMsg.includes('corrupt') ||
+						errorMsg.includes('config') && errorMsg.includes('invalid')) {
+						console.error('Syncthing configuration corruption detected');
+						new Notice('Syncthing configuration may be corrupted. Try resetting the configuration in Advanced settings.', 15000);
+					}
 				});
 
 				this.syncthingInstance.on('exit', (code: any) => {
@@ -832,10 +864,16 @@ export default class Obsyncth extends Plugin {
 					}
 				});
 
-				// Start monitoring after a short delay to allow Syncthing to start
-				setTimeout(() => {
+				// Start monitoring after allowing Syncthing to fully initialize
+				// First run needs more time to create initial config and start web UI
+				const startupDelay = fs.existsSync(`${configDir}/config.xml`) ? 3000 : 8000;
+				console.log(`Waiting ${startupDelay}ms for Syncthing to initialize...`);
+				
+				setTimeout(async () => {
+					// Wait for Syncthing to be responsive before starting monitoring
+					await this.waitForSyncthingStartup(port);
 					this.startStatusMonitoring();
-				}, 2000);
+				}, startupDelay);
 			}
 		});
 	}
@@ -1150,6 +1188,68 @@ export default class Obsyncth extends Plugin {
 				console.log('Could not store port file:', error);
 			}
 		}
+	}
+
+	async waitForSyncthingStartup(port: string): Promise<void> {
+		const maxAttempts = 30; // 30 attempts = ~30 seconds
+		const delayMs = 1000; // 1 second between attempts
+		
+		console.log('Waiting for Syncthing to become responsive...');
+		
+		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+			try {
+				if (typeof require !== 'undefined') {
+					const http = require('http');
+					
+					const result = await new Promise<boolean>((resolve) => {
+						const options = {
+							hostname: '127.0.0.1',
+							port: port,
+							path: '/rest/system/ping',
+							method: 'GET',
+							timeout: 2000,
+							headers: {
+								'User-Agent': 'Obsyncth-Plugin'
+							}
+						};
+						
+						const req = http.request(options, (res: any) => {
+							let body = '';
+							res.on('data', (chunk: any) => body += chunk);
+							res.on('end', () => {
+								// Syncthing ping endpoint returns {"ping":"pong"}
+								resolve(res.statusCode === 200);
+							});
+						});
+						
+						req.on('error', () => {
+							resolve(false);
+						});
+						
+						req.on('timeout', () => {
+							req.destroy();
+							resolve(false);
+						});
+						
+						req.end();
+					});
+					
+					if (result) {
+						console.log(`✅ Syncthing responded after ${attempt} attempts`);
+						return;
+					}
+				}
+				
+				console.log(`Attempt ${attempt}/${maxAttempts}: Syncthing not ready yet...`);
+				await new Promise(resolve => setTimeout(resolve, delayMs));
+				
+			} catch (error) {
+				console.log(`Attempt ${attempt}/${maxAttempts}: Error checking Syncthing: ${error}`);
+				await new Promise(resolve => setTimeout(resolve, delayMs));
+			}
+		}
+		
+		console.warn('⚠️ Syncthing did not become responsive within expected time, proceeding anyway...');
 	}
 
 	getSyncthingURL(): string {
