@@ -4,8 +4,6 @@
 
 **Seamless Obsidian-Syncthing integration** - Cross-platform vault synchronization plugin with automatic binary management and real-time monitoring.
 
-*Test change - workflow fix*
-
 Obsyncth provides effortless vault synchronization across all your devices by integrating Syncthing directly into Obsidian. Whether you're on desktop or mobile, Obsyncth automatically manages Syncthing binaries and provides real-time sync status monitoring.
 
 ## ✨ Key Features
