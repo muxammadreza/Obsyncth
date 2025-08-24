@@ -1931,10 +1931,34 @@ export default class Obsyncth extends Plugin {
             throw new Error('Cannot determine base path.');
         }
 
-        // Relative path
-        const relativePath = `${this.app.vault.configDir}/plugins/${this.manifest.id}-${this.manifest.version}/`;
+        // Try to dynamically find the actual plugin folder name
+        // This handles BRAT beta versions (e.g., obsyncth-1.5.6-beta.7) correctly
+        if (!detectMobilePlatform() && typeof require !== 'undefined') {
+            try {
+                const fs = require('fs');
+                const path = require('path');
+                const pluginsDir = path.join(basePath, this.app.vault.configDir, 'plugins');
+                
+                if (fs.existsSync(pluginsDir)) {
+                    const folders = fs.readdirSync(pluginsDir);
+                    
+                    // Find the folder that contains our main.js file (this running instance)
+                    for (const folder of folders) {
+                        if (folder.startsWith(this.manifest.id + '-') || folder === this.manifest.id) {
+                            const mainJsPath = path.join(pluginsDir, folder, 'main.js');
+                            if (fs.existsSync(mainJsPath)) {
+                                return `${basePath}/${this.app.vault.configDir}/plugins/${folder}/`;
+                            }
+                        }
+                    }
+                }
+            } catch (e) {
+                console.log('Could not dynamically detect plugin folder:', e);
+            }
+        }
 
-        // Absolute path
+        // Fallback: Use manifest id and version (traditional method)
+        const relativePath = `${this.app.vault.configDir}/plugins/${this.manifest.id}-${this.manifest.version}/`;
         return `${basePath}/${relativePath}`;
     }
 
@@ -2679,7 +2703,7 @@ class SettingTab extends PluginSettingTab {
 
 		const pluginItem = diagnostics.createDiv('syncthing-diagnostic-item');
 		pluginItem.createSpan({ cls: 'syncthing-diagnostic-label', text: 'Plugin Version:' });
-		pluginItem.createSpan({ cls: 'syncthing-diagnostic-value', text: '1.5.1' });
+		pluginItem.createSpan({ cls: 'syncthing-diagnostic-value', text: this.plugin.manifest.version });
 
 		// Debug Actions
 		const debugControls = diagnosticsSection.createDiv('syncthing-controls');

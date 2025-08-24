@@ -55,6 +55,12 @@ jobs:
           echo "beta_version=${BETA_VERSION}" >> $GITHUB_OUTPUT
           echo "tag=v${BETA_VERSION}" >> $GITHUB_OUTPUT
 
+      - name: Update manifest with beta version
+        run: |
+          # Update manifest.json with beta version for BRAT compatibility
+          sed -i "s/\"version\": \"${{ steps.version.outputs.version }}\"/\"version\": \"${{ steps.version.outputs.beta_version }}\"/" manifest.json
+          echo "Updated manifest.json version to ${{ steps.version.outputs.beta_version }}"
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
