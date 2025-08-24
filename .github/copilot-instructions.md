@@ -1,7 +1,7 @@
 # Obsyncth - AI Coding Agent Instructions
 
 ## Project Overview
-Obsyncth is a cross-platform Obsidian plugin that integrates Syncthing file synchronization. It features conditional Node.js imports for mobile compatibility and a sophisticated tabbed settings interface.
+Obsyncth is a cross-platform Obsidian plugin that integrates Syncthing file synchronization. It features conditional Node.js imports for mobile compatibility, a sophisticated tabbed settings interface, and robust binary/configuration management with dynamic version handling.
 
 ## Core Architecture
 
@@ -30,6 +30,46 @@ try {
 
 **CRITICAL**: All Node.js operations must be wrapped in platform checks and provide mobile fallbacks.
 
+### Robust Plugin Path Detection System
+The plugin uses dynamic folder detection to handle both regular installs and BRAT beta versions:
+
+```typescript
+getPluginAbsolutePath(): string {
+    const basePath = this.app.vault.adapter.getBasePath();
+    
+    // Dynamic detection for BRAT beta versions (e.g., obsyncth-1.5.6-beta.7)
+    if (!detectMobilePlatform() && typeof require !== 'undefined') {
+        try {
+            const fs = require('fs');
+            const path = require('path');
+            const pluginsDir = path.join(basePath, this.app.vault.configDir, 'plugins');
+            
+            if (fs.existsSync(pluginsDir)) {
+                const folders = fs.readdirSync(pluginsDir);
+                
+                // Find folder containing our main.js (this running instance)
+                for (const folder of folders) {
+                    if (folder.startsWith(this.manifest.id + '-') || folder === this.manifest.id) {
+                        const mainJsPath = path.join(pluginsDir, folder, 'main.js');
+                        if (fs.existsSync(mainJsPath)) {
+                            return `${basePath}/${this.app.vault.configDir}/plugins/${folder}/`;
+                        }
+                    }
+                }
+            }
+        } catch (e) {
+            console.log('Could not dynamically detect plugin folder:', e);
+        }
+    }
+    
+    // Fallback: Traditional method
+    const relativePath = `${this.app.vault.configDir}/plugins/${this.manifest.id}-${this.manifest.version}/`;
+    return `${basePath}/${relativePath}`;
+}
+```
+
+**CRITICAL**: This system handles version mismatches between manifest.json and actual installed folder names (common with BRAT beta installations).
+
 ### Dual Tab Architecture
 The settings interface switches between mobile/desktop implementations:
 
@@ -43,20 +83,35 @@ private renderAdvancedTab(container: HTMLElement): void {
 }
 ```
 
-### SyncthingMonitor Event System
-Real-time status monitoring using Node.js HTTP (desktop) or fetch (mobile):
+### Dynamic Version Management
+Plugin version is read dynamically from manifest to handle BRAT beta versions:
 
 ```typescript
-class SyncthingMonitor extends EventEmitter {
-  // Uses Node.js http.request for localhost communication
-  // Emits 'status-update' events with { status, fileCompletion, connectedDevicesCount }
-}
-
-// Usage in plugin
-this.monitor.on('status-update', (data) => {
-  this.updateStatusBarFromMonitor(data);
+// System diagnostics shows current version dynamically
+pluginItem.createSpan({ 
+  cls: 'syncthing-diagnostic-value', 
+  text: this.plugin.manifest.version  // Dynamic, not hardcoded
 });
 ```
+
+### Organized File Structure
+All Syncthing-related files are contained within a single organized folder:
+
+```
+Syncthing binary-config/
+├── syncthing-config/          # Configuration files (--home directory)
+│   ├── cert.pem
+│   ├── config.xml
+│   ├── https-cert.pem
+│   ├── key.pem
+│   ├── index-v2/
+│   └── syncthing.lock
+├── syncthing-linux            # Platform-specific executables
+├── syncthing-macos
+└── syncthing.exe
+```
+
+**CRITICAL**: Config directory path is `${pluginPath}Syncthing binary-config/syncthing-config`
 
 ## Key Development Patterns
 
@@ -73,7 +128,15 @@ Syncthing executables are stored in `"Syncthing binary-config/"` with platform-s
 - macOS: `syncthing-macos` 
 - Linux: `syncthing-linux`
 
-Binary download/extraction uses platform-specific archive handling (ZIP/TAR.GZ) with executable validation.
+Binary download/extraction uses platform-specific archive handling (ZIP/TAR.GZ) with executable validation. The `extractAndInstallSyncthing()` function MUST use the same folder path as `getSyncthingExecutablePath()` to ensure downloaded binaries are found correctly.
+
+### Configuration Management
+Syncthing configuration is stored in `"Syncthing binary-config/syncthing-config/"` using the `--home` parameter:
+
+```typescript
+const configDir = `${this.getPluginAbsolutePath()}Syncthing binary-config/syncthing-config`;
+const args = ['--home', configDir, '--no-browser', '--gui-address', `127.0.0.1:${port}`];
+```
 
 ### Settings Persistence
 Settings auto-save triggers monitor restart:
@@ -106,6 +169,9 @@ The build shows TypeScript warnings about implicit 'any' types - these are **non
 
 ### Binary Folder Path Consistency
 **Critical**: The `extractAndInstallSyncthing()` function MUST use the same folder path as `getSyncthingExecutablePath()`. Both should use `"Syncthing binary-config/"` folder to ensure downloaded binaries are found correctly.
+
+### BRAT Beta Version Handling
+The plugin handles BRAT beta installations (e.g., `obsyncth-1.5.6-beta.7`) through dynamic folder detection that finds the actual plugin directory containing `main.js`. The testing release workflow automatically updates manifest.json with beta versions to maintain BRAT compatibility.
 
 ### Mobile Compatibility
 - All Node.js operations must check `platformInfo.isDesktop`
@@ -157,6 +223,7 @@ The `scripts/release.sh` handles version synchronization, building, git tagging,
 - **Testing Release Workflow** (`testing-release.yaml`):
   - Triggered on pushes to the `dev` branch.
   - Creates beta releases (e.g., `v1.5.5-beta.123`) for testing.
+  - Automatically updates manifest.json with beta version to prevent BRAT version mismatches.
   - Uploads BRAT-compatible assets: `main.js`, `manifest.json`, `styles.css`.
 
 - **Auto Release Workflow** (`auto-release.yaml`):
@@ -178,6 +245,7 @@ All workflows now ensure:
 - ✅ Repository format: `muxammadreza/Obsyncth`
 - ✅ Cross-platform support documentation
 - ✅ Semantic versioning compliance
+- ✅ Automatic manifest.json version updates for beta releases
 
 ### Installation Methods for Users
 **BRAT Installation (Recommended):**
