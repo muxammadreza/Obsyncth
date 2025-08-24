@@ -117,10 +117,17 @@ Syncthing binary-config/
 
 ### Build & Development Commands
 ```bash
-npm run dev        # Watch mode with source maps
-npm run build      # Production build (TypeScript errors are warnings)
-npm run version    # Bump version across manifest.json and versions.json
+npm run dev        # Watch mode with source maps (uses config/esbuild.config.mjs)
+npm run build      # Production build with TypeScript checking (config/tsconfig.json)
+npm run build:ci   # CI-friendly build (TypeScript errors as warnings)
+npm run version    # Bump version across manifest.json and versions.json (build/version-bump.mjs)
 ```
+
+**Important**: The build system automatically:
+- Compiles `src/main.ts` → `main.js` (root directory)
+- Copies `src/styles.css` → `styles.css` (root directory)
+- Uses configuration files from `config/` folder
+- Ensures BRAT compatibility with proper file placement
 
 ### Binary Management System
 Syncthing executables are stored in `"Syncthing binary-config/"` with platform-specific naming:
@@ -156,11 +163,52 @@ Three operational modes with different URL resolution:
 
 ## File Organization
 
-- `main.ts`: Single-file architecture (~2800 lines)
-- `manifest.json`: Plugin metadata (sync with package.json version)
-- `esbuild.config.mjs`: Build configuration with Obsidian externals
-- `scripts/release.sh`: Automated release with git tagging
-- `docker/`: Docker Compose stack for containerized Syncthing
+The codebase follows a clean, organized structure:
+
+```
+Obsyncth/
+├── src/                          # Source code
+│   ├── main.ts                   # Main plugin TypeScript code (~2800 lines)
+│   └── styles.css                # Plugin CSS styles
+├── config/                       # Configuration files
+│   ├── esbuild.config.mjs        # Build configuration with Obsidian externals
+│   ├── tsconfig.json             # TypeScript configuration
+│   ├── .eslintrc                 # ESLint linting rules
+│   ├── .eslintignore             # ESLint ignore patterns
+│   ├── .editorconfig             # Editor configuration
+│   └── .npmrc                    # NPM configuration
+├── build/                        # Build scripts and utilities
+│   └── version-bump.mjs          # Version management script
+├── tests/                        # Test files and debugging utilities
+│   ├── test-*.js                 # Individual test scripts for different functionality
+│   ├── debug-executable.js       # Debug utilities for executable detection
+│   └── README.md                 # Testing documentation and instructions
+├── scripts/                      # Release and deployment scripts
+│   └── release.sh               # Automated release with git tagging
+├── docker/                       # Docker configuration
+│   ├── docker-compose.yaml      # Docker Compose stack for containerized Syncthing
+│   ├── Dockerfile               # Container definition
+│   └── nginx.conf               # Nginx proxy configuration
+├── .github/                      # GitHub Actions and documentation
+│   ├── workflows/               # CI/CD automation workflows
+│   └── copilot-instructions.md  # AI assistant development guidelines
+├── Syncthing binary-config/      # Syncthing binaries and runtime
+│   ├── syncthing-linux          # Linux executable
+│   ├── syncthing-macos          # macOS executable
+│   ├── syncthing.exe            # Windows executable
+│   └── syncthing-config/        # Runtime configuration (gitignored)
+├── manifest.json                 # Obsidian plugin manifest (sync with package.json version)
+├── versions.json                 # Version compatibility information
+├── package.json                  # Node.js dependencies and build scripts
+└── main.js                       # Built plugin output (generated, not committed)
+```
+
+### Build System
+The build system automatically handles the file structure:
+- **Source**: TypeScript code is in `src/main.ts`
+- **Styles**: CSS is in `src/styles.css` and automatically copied to root during build
+- **Configuration**: All config files are in `config/` folder
+- **Output**: Built files (`main.js`, `styles.css`) are generated in root for BRAT compatibility
 
 ## Common Issues & Solutions
 
@@ -184,6 +232,19 @@ The monitoring system uses different approaches:
 - Mobile: Fetch API to remote Syncthing instance
 
 Always test both modes when modifying status-related code.
+
+### Testing Infrastructure
+The `tests/` folder contains comprehensive test scripts and debugging utilities:
+- **test-*.js**: Individual test scripts for different plugin functionality
+- **debug-executable.js**: Debug utilities for executable path resolution
+- **README.md**: Documentation for test organization and future improvements
+
+Tests are currently standalone Node.js scripts. Run them individually:
+```bash
+node tests/test-executable.js
+node tests/test-monitor.js
+# etc.
+```
 
 ## Debugging
 Use the Advanced tab's "View Logs" button which outputs diagnostic info to browser console with settings, platform info, and executable paths.

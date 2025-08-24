@@ -1,6 +1,8 @@
 import esbuild from "esbuild";
 import process from "process";
 import builtins from "builtin-modules";
+import fs from "fs";
+import path from "path";
 
 const banner =
 `/*
@@ -43,9 +45,25 @@ const context = await esbuild.context({
 	outfile: "main.js",
 });
 
+// Copy styles.css from src to root for BRAT compatibility
+const copyStyles = () => {
+	const srcPath = path.join(process.cwd(), 'src', 'styles.css');
+	const destPath = path.join(process.cwd(), 'styles.css');
+	
+	if (fs.existsSync(srcPath)) {
+		fs.copyFileSync(srcPath, destPath);
+		console.log('✅ Copied styles.css to root directory');
+	} else {
+		console.log('⚠️ styles.css not found in src/, creating empty file');
+		fs.writeFileSync(destPath, '/* No styles defined */');
+	}
+};
+
 if (prod) {
 	await context.rebuild();
+	copyStyles();
 	process.exit(0);
 } else {
 	await context.watch();
+	copyStyles();
 }
