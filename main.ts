@@ -2450,6 +2450,12 @@ class SettingTab extends PluginSettingTab {
 			text: 'API key for authentication (found in Syncthing GUI → Settings → GUI)'
 		});
 
+		// Auto-save API key on input
+		apiKeyInput.addEventListener('input', async () => {
+			this.plugin.settings.syncthingApiKey = apiKeyInput.value;
+			await this.plugin.saveSettings();
+		});
+
 		const folderIdGroup = apiSection.createDiv('syncthing-form-group');
 		folderIdGroup.createEl('label', { cls: 'syncthing-label', text: 'Vault Folder ID' });
 		const folderIdInput = folderIdGroup.createEl('input', {
@@ -2459,6 +2465,12 @@ class SettingTab extends PluginSettingTab {
 		folderIdGroup.createDiv({
 			cls: 'syncthing-help-text',
 			text: 'ID of the folder containing your vault (found in Syncthing GUI → Folders)'
+		});
+
+		// Auto-save folder ID on input
+		folderIdInput.addEventListener('input', async () => {
+			this.plugin.settings.vaultFolderID = folderIdInput.value;
+			await this.plugin.saveSettings();
 		});
 
 		// Connection Mode Section
@@ -2475,11 +2487,23 @@ class SettingTab extends PluginSettingTab {
 		mobileInput.checked = this.plugin.settings.mobileMode;
 		mobileCheckbox.createSpan({ text: 'Mobile Mode (connect to remote Syncthing)' });
 
+		// Auto-save mobile mode setting
+		mobileInput.addEventListener('change', async () => {
+			this.plugin.settings.mobileMode = mobileInput.checked;
+			await this.plugin.saveSettings();
+		});
+
 		const dockerGroup = modeSection.createDiv('syncthing-form-group');
 		const dockerCheckbox = dockerGroup.createEl('label', { cls: 'syncthing-checkbox' });
 		const dockerInput = dockerCheckbox.createEl('input', { attr: { type: 'checkbox' } });
 		dockerInput.checked = this.plugin.settings.useDocker;
 		dockerCheckbox.createSpan({ text: 'Use Docker (run Syncthing in container)' });
+
+		// Auto-save docker mode setting
+		dockerInput.addEventListener('change', async () => {
+			this.plugin.settings.useDocker = dockerInput.checked;
+			await this.plugin.saveSettings();
+		});
 
 		const remoteUrlGroup = modeSection.createDiv('syncthing-form-group');
 		remoteUrlGroup.createEl('label', { cls: 'syncthing-label', text: 'Remote Syncthing URL' });
@@ -2490,6 +2514,12 @@ class SettingTab extends PluginSettingTab {
 		remoteUrlGroup.createDiv({
 			cls: 'syncthing-help-text',
 			text: 'URL of remote Syncthing instance (used in mobile mode)'
+		});
+
+		// Auto-save remote URL on input
+		remoteUrlInput.addEventListener('input', async () => {
+			this.plugin.settings.remoteUrl = remoteUrlInput.value;
+			await this.plugin.saveSettings();
 		});
 
 		// Startup Configuration Section
@@ -2506,18 +2536,31 @@ class SettingTab extends PluginSettingTab {
 		autoStartInput.checked = this.plugin.settings.startOnObsidianOpen;
 		autoStartCheckbox.createSpan({ text: 'Start Syncthing when Obsidian opens' });
 
+		// Auto-save startup setting
+		autoStartInput.addEventListener('change', async () => {
+			this.plugin.settings.startOnObsidianOpen = autoStartInput.checked;
+			await this.plugin.saveSettings();
+		});
+
 		const autoStopGroup = startupSection.createDiv('syncthing-form-group');
 		const autoStopCheckbox = autoStopGroup.createEl('label', { cls: 'syncthing-checkbox' });
 		const autoStopInput = autoStopCheckbox.createEl('input', { attr: { type: 'checkbox' } });
 		autoStopInput.checked = this.plugin.settings.stopOnObsidianClose;
 		autoStopCheckbox.createSpan({ text: 'Stop Syncthing when Obsidian closes' });
 
-		// Save button
+		// Auto-save shutdown setting
+		autoStopInput.addEventListener('change', async () => {
+			this.plugin.settings.stopOnObsidianClose = autoStopInput.checked;
+			await this.plugin.saveSettings();
+		});
+
+		// Save button (now redundant since all fields auto-save, but keeping for user feedback)
 		const saveBtn = container.createEl('button', {
 			cls: 'syncthing-btn primary',
-			text: '💾 Save Configuration'
+			text: '💾 Manual Save & Refresh'
 		});
 		saveBtn.addEventListener('click', async () => {
+			// Force save all current values (though they should already be saved)
 			this.plugin.settings.syncthingApiKey = apiKeyInput.value;
 			this.plugin.settings.vaultFolderID = folderIdInput.value;
 			this.plugin.settings.mobileMode = mobileInput.checked;
@@ -2527,7 +2570,12 @@ class SettingTab extends PluginSettingTab {
 			this.plugin.settings.stopOnObsidianClose = autoStopInput.checked;
 
 			await this.plugin.saveSettings();
-			new Notice('Settings saved successfully');
+			new Notice('Configuration refreshed and saved successfully');
+			
+			// Refresh the overview tab to show updated settings
+			if (this.activeTab === 'configuration') {
+				this.display();
+			}
 		});
 	}
 
