@@ -52,7 +52,7 @@ jobs:
 
       - name: Build plugin
         if: steps.version-check.outputs.version-changed == 'true'
-        run: npm run build
+        run: npm run build:ci
 
       - name: Validate build artifacts
         if: steps.version-check.outputs.version-changed == 'true'

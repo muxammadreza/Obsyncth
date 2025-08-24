@@ -25,7 +25,7 @@ jobs:
         run: npm ci
 
       - name: Build plugin
-        run: npm run build
+        run: npm run build:ci
 
       - name: Validate build artifacts
         run: |
