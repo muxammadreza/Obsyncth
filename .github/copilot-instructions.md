@@ -104,6 +104,9 @@ Three operational modes with different URL resolution:
 ### TypeScript Errors
 The build shows TypeScript warnings about implicit 'any' types - these are **non-blocking** and expected due to conditional Node.js imports. Focus on runtime functionality over strict typing.
 
+### Binary Folder Path Consistency
+**Critical**: The `extractAndInstallSyncthing()` function MUST use the same folder path as `getSyncthingExecutablePath()`. Both should use `"Syncthing binary-config/"` folder to ensure downloaded binaries are found correctly.
+
 ### Mobile Compatibility
 - All Node.js operations must check `platformInfo.isDesktop`
 - Provide meaningful fallbacks for mobile users
