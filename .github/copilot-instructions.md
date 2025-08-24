@@ -121,3 +121,39 @@ Use the Advanced tab's "View Logs" button which outputs diagnostic info to brows
 
 ## Release Process
 The `scripts/release.sh` handles version synchronization, building, git tagging, and GitHub release creation automatically. Always use this instead of manual version bumps.
+
+## Updated Push and Release Instructions
+
+### Branching Strategy
+- **`main` branch**: Used for stable releases. All production-ready code should be merged into this branch.
+- **`dev` branch**: Used for testing releases. All new features and fixes should be pushed here first for testing.
+
+### Pushing Changes
+1. **For Testing Releases**:
+   - Make changes and commit them to the `dev` branch.
+   - Push the changes to the remote repository:
+     ```bash
+     git push origin dev
+     ```
+   - This will trigger the `testing-release.yaml` workflow to build and test the changes.
+
+2. **For Stable Releases**:
+   - After testing is complete, merge the `dev` branch into `main`:
+     ```bash
+     git checkout main
+     git merge dev
+     ```
+   - Push the changes to the `main` branch:
+     ```bash
+     git push origin main
+     ```
+   - This will trigger the `stable-release.yaml` workflow to build and deploy the stable release.
+
+### GitHub Workflows
+- **Testing Release Workflow**:
+  - Triggered on pushes to the `dev` branch.
+  - Runs tests and builds the plugin for deployment to a testing environment.
+
+- **Stable Release Workflow**:
+  - Triggered on pushes to the `main` branch.
+  - Builds the plugin and deploys it to production.
