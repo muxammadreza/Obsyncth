@@ -7,11 +7,12 @@ on:
     paths-ignore:
       - 'README.md'
       - 'docs/**'
-      - '.github/**'
 
 jobs:
   check-and-release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     
     steps:
       - name: Checkout
@@ -24,9 +25,6 @@ jobs:
         with:
           node-version: "18"
           cache: "npm"
-
-      - name: Install dependencies
-        run: npm ci
 
       - name: Check if version changed
         id: version-check
@@ -48,6 +46,10 @@ jobs:
             echo "ℹ️ Version unchanged: ${CURRENT_VERSION}"
           fi
 
+      - name: Install dependencies
+        if: steps.version-check.outputs.version-changed == 'true'
+        run: npm ci
+
       - name: Build plugin
         if: steps.version-check.outputs.version-changed == 'true'
         run: npm run build
@@ -63,54 +65,48 @@ jobs:
             echo "❌ Build failed: manifest.json not found"
             exit 1
           fi
+          if [ ! -f "styles.css" ]; then
+            echo "ℹ️ styles.css not found, creating empty file"
+            touch styles.css
+          fi
           echo "✅ Build artifacts validated successfully"
-
-      - name: Create and push tag
-        if: steps.version-check.outputs.version-changed == 'true'
-        run: |
-          VERSION=${{ steps.version-check.outputs.current-version }}
-          git config user.name github-actions
-          git config user.email github-actions@github.com
-          git tag -a "v${VERSION}" -m "Release v${VERSION}"
-          git push origin "v${VERSION}"
 
       - name: Create Release
         if: steps.version-check.outputs.version-changed == 'true'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          VERSION=${{ steps.version-check.outputs.current-version }}
-          
-          gh release create "v${VERSION}" \
-            --title "v${VERSION}" \
-            --notes "🚀 **Obsyncth v${VERSION}**
-          
-          Auto-release triggered by push to main branch.
-          
-          **Installation Methods:**
-          
-          **📦 Manual Installation:**
-          1. Download \`main.js\`, \`manifest.json\`, and \`styles.css\`
-          2. Create folder \`VaultFolder/.obsidian/plugins/obsyncth/\`
-          3. Place the downloaded files in this folder
-          4. Reload Obsidian and enable the plugin
-          
-          **🧪 BRAT Installation (Recommended):**
-          1. Install the BRAT plugin in Obsidian
-          2. Add this repository: \`muxammadreza/Obsyncth\`
-          3. Enable the plugin in your settings
-          
-          **✨ Recent Changes:**
-          
-          $(git log --oneline $(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo)..HEAD --pretty=format:'- %s' | head -10)
-          
-          **📱 Cross-Platform Support:**
-          - ✅ Windows, macOS, Linux (automatic Syncthing management)
-          - ✅ Mobile (iOS/Android) via remote Syncthing instances
-          - 🐳 Docker support included
-          
-          For more information, visit the [GitHub repository](https://github.com/muxammadreza/Obsyncth)." \
-            main.js manifest.json styles.css
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "v${{ steps.version-check.outputs.current-version }}"
+          name: "v${{ steps.version-check.outputs.current-version }}"
+          body: |
+            🚀 **Obsyncth v${{ steps.version-check.outputs.current-version }}**
+            
+            Auto-release triggered by push to main branch.
+            
+            **Installation Methods:**
+            
+            **📦 Manual Installation:**
+            1. Download `main.js`, `manifest.json`, and `styles.css`
+            2. Create folder `VaultFolder/.obsidian/plugins/obsyncth/`
+            3. Place the downloaded files in this folder
+            4. Reload Obsidian and enable the plugin
+            
+            **🧪 BRAT Installation (Recommended):**
+            1. Install the BRAT plugin in Obsidian
+            2. Add this repository: `muxammadreza/Obsyncth`
+            3. Enable the plugin in your settings
+            
+            **📱 Cross-Platform Support:**
+            - ✅ Windows, macOS, Linux (automatic Syncthing management)
+            - ✅ Mobile (iOS/Android) via remote Syncthing instances
+            - 🐳 Docker support included
+            
+            For more information, visit the [GitHub repository](https://github.com/muxammadreza/Obsyncth).
+          files: |
+            main.js
+            manifest.json
+            styles.css
+          draft: false
+          prerelease: false
 
       - name: Release summary
         if: steps.version-check.outputs.version-changed == 'true'

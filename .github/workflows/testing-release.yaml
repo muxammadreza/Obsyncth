@@ -9,10 +9,14 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
-
+    permissions:
+      contents: write
+      
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Use Node.js
         uses: actions/setup-node@v4
@@ -36,38 +40,48 @@ jobs:
             echo "❌ Build failed: manifest.json not found"
             exit 1
           fi
+          if [ ! -f "styles.css" ]; then
+            echo "ℹ️ styles.css not found, creating empty file"
+            touch styles.css
+          fi
           echo "✅ Build artifacts validated successfully"
 
-      - name: Create beta release
-        if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Get version info
+        id: version
         run: |
-          # Get the current version and append beta suffix
           VERSION=$(node -p "require('./package.json').version")
           BETA_VERSION="${VERSION}-beta.${GITHUB_RUN_NUMBER}"
-          
-          # Create a beta tag
-          git config user.name github-actions
-          git config user.email github-actions@github.com
-          git tag -a "v${BETA_VERSION}" -m "Beta release v${BETA_VERSION}"
-          git push origin "v${BETA_VERSION}"
-          
-          # Create GitHub release
-          gh release create "v${BETA_VERSION}" \
-            --title "v${BETA_VERSION} (Beta)" \
-            --notes "🧪 **Beta Release for Testing**
-          
-          This is an automated beta release from the dev branch for testing purposes.
-          
-          **Installation via BRAT:**
-          1. Install the BRAT plugin in Obsidian
-          2. Add this repository: \`muxammadreza/Obsyncth\`
-          3. Enable the plugin in your settings
-          
-          **Changes in this beta:**
-          $(git log --oneline --since='1 day ago' --pretty=format:'- %s' | head -10)
-          
-          ⚠️ This is a beta release. Use with caution in production environments." \
-            --prerelease \
-            main.js manifest.json styles.css
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "beta_version=${BETA_VERSION}" >> $GITHUB_OUTPUT
+          echo "tag=v${BETA_VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: "${{ steps.version.outputs.beta_version }} (Beta)"
+          body: |
+            🧪 **Beta Release for Testing**
+            
+            This is an automated beta release from the dev branch for testing purposes.
+            
+            **Installation via BRAT:**
+            1. Install the BRAT plugin in Obsidian
+            2. Add this repository: `muxammadreza/Obsyncth`
+            3. Enable the plugin in your settings
+            
+            **Version:** ${{ steps.version.outputs.beta_version }}
+            **Commit:** ${{ github.sha }}
+            
+            **📦 Files included:**
+            - `main.js` - Main plugin code
+            - `manifest.json` - Plugin manifest
+            - `styles.css` - Plugin styles
+            
+            ⚠️ This is a beta release. Use with caution in production environments.
+          files: |
+            main.js
+            manifest.json
+            styles.css
+          prerelease: true
+          draft: false
