@@ -819,7 +819,16 @@ export default class Obsyncth extends Plugin {
 				}
 
 				this.syncthingInstance.stdout.on('data', (data: any) => {
-					console.log(`stdout: ${data}`);
+					const output = data.toString();
+					console.log(`stdout: ${output}`);
+					
+					// Look for web GUI ready indicators in the logs
+					if (output.includes('GUI and API listening') || 
+						output.includes('Web GUI is available') ||
+						output.includes('Web UI is available') ||
+						output.includes('Access the GUI via')) {
+						console.log('🌐 Syncthing GUI startup detected in logs');
+					}
 				});
 
 				this.syncthingInstance.stderr.on('data', (data: any) => {
@@ -1205,25 +1214,28 @@ export default class Obsyncth extends Plugin {
 						const options = {
 							hostname: '127.0.0.1',
 							port: port,
-							path: '/rest/system/ping',
+							path: '/', // Check root path instead of API endpoint
 							method: 'GET',
-							timeout: 2000,
+							timeout: 3000,
 							headers: {
 								'User-Agent': 'Obsyncth-Plugin'
 							}
 						};
 						
 						const req = http.request(options, (res: any) => {
-							let body = '';
-							res.on('data', (chunk: any) => body += chunk);
-							res.on('end', () => {
-								// Syncthing ping endpoint returns {"ping":"pong"}
-								resolve(res.statusCode === 200);
-							});
+							// If we get any HTTP response (200, 401, 403, etc.), it means the server is running
+							// Syncthing GUI typically returns 200 for root path or redirects
+							resolve(res.statusCode >= 200 && res.statusCode < 500);
 						});
 						
-						req.on('error', () => {
-							resolve(false);
+						req.on('error', (error: any) => {
+							// If it's a connection refused error, server isn't running yet
+							if (error.code === 'ECONNREFUSED') {
+								resolve(false);
+							} else {
+								// Other errors might mean server is starting up
+								resolve(false);
+							}
 						});
 						
 						req.on('timeout', () => {
@@ -1235,12 +1247,14 @@ export default class Obsyncth extends Plugin {
 					});
 					
 					if (result) {
-						console.log(`✅ Syncthing responded after ${attempt} attempts`);
+						console.log(`✅ Syncthing web interface is responsive after ${attempt} attempts`);
+						// Give it a moment more to fully initialize
+						await new Promise(resolve => setTimeout(resolve, 1000));
 						return;
 					}
 				}
 				
-				console.log(`Attempt ${attempt}/${maxAttempts}: Syncthing not ready yet...`);
+				console.log(`Attempt ${attempt}/${maxAttempts}: Syncthing web interface not ready yet...`);
 				await new Promise(resolve => setTimeout(resolve, delayMs));
 				
 			} catch (error) {
