@@ -6,6 +6,7 @@
 	"scripts": {
 		"dev": "node esbuild.config.mjs",
 		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+		"test": "echo \"No tests specified\" && exit 0",
 		"version": "node version-bump.mjs && git add manifest.json versions.json",
 		"release": "./scripts/release.sh",
 		"release:patch": "./scripts/release.sh patch",

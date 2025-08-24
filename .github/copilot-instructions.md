@@ -135,25 +135,54 @@ The `scripts/release.sh` handles version synchronization, building, git tagging,
      ```bash
      git push origin dev
      ```
-   - This will trigger the `testing-release.yaml` workflow to build and test the changes.
+   - This will trigger the `testing-release.yaml` workflow to build and create beta releases with BRAT compatibility.
 
 2. **For Stable Releases**:
    - After testing is complete, merge the `dev` branch into `main`:
      ```bash
      git checkout main
      git merge dev
-     ```
-   - Push the changes to the `main` branch:
-     ```bash
      git push origin main
      ```
-   - This will trigger the `stable-release.yaml` workflow to build and deploy the stable release.
+   - **Option A - Automatic Release**: If version was bumped, the `auto-release.yaml` workflow will automatically create a release.
+   - **Option B - Manual Release**: Use the release script:
+     ```bash
+     npm run release:patch  # or minor/major
+     ```
 
-### GitHub Workflows
-- **Testing Release Workflow**:
+### GitHub Workflows (BRAT Compatible)
+- **Testing Release Workflow** (`testing-release.yaml`):
   - Triggered on pushes to the `dev` branch.
-  - Runs tests and builds the plugin for deployment to a testing environment.
+  - Creates beta releases (e.g., `v1.5.5-beta.123`) for testing.
+  - Uploads BRAT-compatible assets: `main.js`, `manifest.json`, `styles.css`.
 
-- **Stable Release Workflow**:
-  - Triggered on pushes to the `main` branch.
-  - Builds the plugin and deploys it to production.
+- **Auto Release Workflow** (`auto-release.yaml`):
+  - Triggered on pushes to the `main` branch when version changes are detected.
+  - Automatically creates stable releases with proper BRAT-compatible assets.
+
+- **Tag-based Release Workflow** (`stable-release.yaml`):
+  - Triggered when version tags (e.g., `v1.5.5`) are pushed.
+  - Creates final stable releases with comprehensive release notes.
+
+- **Validation Workflow** (`validate.yaml`):
+  - Validates workflow syntax and BRAT compatibility requirements.
+  - Ensures `manifest.json` has all required fields.
+
+### BRAT Compatibility Features
+All workflows now ensure:
+- ✅ Proper asset uploads (`main.js`, `manifest.json`, `styles.css`)
+- ✅ BRAT installation instructions in release notes
+- ✅ Repository format: `muxammadreza/Obsyncth`
+- ✅ Cross-platform support documentation
+- ✅ Semantic versioning compliance
+
+### Installation Methods for Users
+**BRAT Installation (Recommended):**
+1. Install BRAT plugin in Obsidian
+2. Add repository: `muxammadreza/Obsyncth`
+3. Enable the plugin
+
+**Manual Installation:**
+1. Download release assets from GitHub
+2. Extract to `.obsidian/plugins/obsyncth/`
+3. Enable in Community Plugins

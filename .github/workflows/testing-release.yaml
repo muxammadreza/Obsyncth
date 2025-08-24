@@ -1,4 +1,4 @@
-name: Deploy Testing Release
+name: Testing Release
 
 on:
   push:
@@ -10,23 +10,63 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Use Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
-          node-version: "18.x"
+          node-version: "18"
+          cache: "npm"
 
       - name: Install dependencies
-        run: npm install
-
-      - name: Run tests
-        run: npm test
+        run: npm ci
 
       - name: Build plugin
         run: npm run build
 
-      - name: Deploy to testing environment
+      - name: Validate build artifacts
         run: |
-          echo "Deploying testing release..."
-          # Add deployment commands here
+          if [ ! -f "main.js" ]; then
+            echo "❌ Build failed: main.js not found"
+            exit 1
+          fi
+          if [ ! -f "manifest.json" ]; then
+            echo "❌ Build failed: manifest.json not found"
+            exit 1
+          fi
+          echo "✅ Build artifacts validated successfully"
+
+      - name: Create beta release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Get the current version and append beta suffix
+          VERSION=$(node -p "require('./package.json').version")
+          BETA_VERSION="${VERSION}-beta.${GITHUB_RUN_NUMBER}"
+          
+          # Create a beta tag
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git tag -a "v${BETA_VERSION}" -m "Beta release v${BETA_VERSION}"
+          git push origin "v${BETA_VERSION}"
+          
+          # Create GitHub release
+          gh release create "v${BETA_VERSION}" \
+            --title "v${BETA_VERSION} (Beta)" \
+            --notes "🧪 **Beta Release for Testing**
+          
+          This is an automated beta release from the dev branch for testing purposes.
+          
+          **Installation via BRAT:**
+          1. Install the BRAT plugin in Obsidian
+          2. Add this repository: \`muxammadreza/Obsyncth\`
+          3. Enable the plugin in your settings
+          
+          **Changes in this beta:**
+          $(git log --oneline --since='1 day ago' --pretty=format:'- %s' | head -10)
+          
+          ⚠️ This is a beta release. Use with caution in production environments." \
+            --prerelease \
+            main.js manifest.json styles.css

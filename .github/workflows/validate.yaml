@@ -1,0 +1,98 @@
+name: Validate Workflows
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/**'
+  push:
+    branches:
+      - main
+      - dev
+    paths:
+      - '.github/workflows/**'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate workflow syntax
+        run: |
+          echo "🔍 Validating GitHub Actions workflow syntax..."
+          
+          # Check if workflow files exist
+          if [ ! -d ".github/workflows" ]; then
+            echo "❌ No .github/workflows directory found"
+            exit 1
+          fi
+          
+          # List all workflow files
+          echo "📋 Found workflow files:"
+          find .github/workflows -name "*.yaml" -o -name "*.yml" | while read file; do
+            echo "  - $file"
+          done
+          
+          # Basic YAML validation using Python
+          python3 -c "
+          import yaml
+          import sys
+          import os
+          
+          workflow_dir = '.github/workflows'
+          valid = True
+          
+          for root, dirs, files in os.walk(workflow_dir):
+              for file in files:
+                  if file.endswith(('.yaml', '.yml')):
+                      filepath = os.path.join(root, file)
+                      try:
+                          with open(filepath, 'r') as f:
+                              yaml.safe_load(f)
+                          print(f'✅ {filepath} - Valid YAML')
+                      except yaml.YAMLError as e:
+                          print(f'❌ {filepath} - Invalid YAML: {e}')
+                          valid = False
+          
+          if not valid:
+              sys.exit(1)
+          else:
+              print('🎉 All workflow files are valid!')
+          "
+
+      - name: Check required files for BRAT compatibility
+        run: |
+          echo "🔍 Checking BRAT compatibility requirements..."
+          
+          # Check if manifest.json exists and has required fields
+          if [ ! -f "manifest.json" ]; then
+            echo "❌ manifest.json not found"
+            exit 1
+          fi
+          
+          # Validate manifest.json structure
+          node -e "
+          const manifest = require('./manifest.json');
+          const required = ['id', 'name', 'version', 'minAppVersion'];
+          
+          for (const field of required) {
+            if (!manifest[field]) {
+              console.log(\`❌ manifest.json missing required field: \${field}\`);
+              process.exit(1);
+            }
+          }
+          
+          console.log('✅ manifest.json has all required fields');
+          console.log(\`📦 Plugin: \${manifest.name} v\${manifest.version}\`);
+          "
+          
+          echo "✅ BRAT compatibility requirements validated"
+
+      - name: Summary
+        run: |
+          echo "🎯 Validation Summary:"
+          echo "✅ Workflow syntax validation passed"
+          echo "✅ BRAT compatibility requirements met"
+          echo "🚀 Ready for BRAT installation via: muxammadreza/Obsyncth"

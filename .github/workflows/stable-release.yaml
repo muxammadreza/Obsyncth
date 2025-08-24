@@ -1,29 +1,97 @@
-name: Deploy Stable Release
+name: Release
 
 on:
   push:
-    branches:
-      - main
+    tags:
+      - "v*"
 
 jobs:
-  build-and-deploy:
+  build-and-release:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Use Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
-          node-version: "18.x"
+          node-version: "18"
+          cache: "npm"
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Build plugin
         run: npm run build
 
-      - name: Deploy to production
+      - name: Validate build artifacts
         run: |
-          echo "Deploying stable release..."
-          # Add deployment commands here
+          if [ ! -f "main.js" ]; then
+            echo "❌ Build failed: main.js not found"
+            exit 1
+          fi
+          if [ ! -f "manifest.json" ]; then
+            echo "❌ Build failed: manifest.json not found"
+            exit 1
+          fi
+          echo "✅ Build artifacts validated successfully"
+
+      - name: Get version
+        id: version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" \
+            --title "v${{ steps.version.outputs.version }}" \
+            --notes "🚀 **Obsyncth v${{ steps.version.outputs.version }}**
+          
+          A cross-platform Obsidian plugin that integrates Syncthing file synchronization with automatic binary management and real-time status monitoring.
+          
+          **Installation Methods:**
+          
+          **📦 Manual Installation:**
+          1. Download \`main.js\`, \`manifest.json\`, and \`styles.css\`
+          2. Create folder \`VaultFolder/.obsidian/plugins/obsyncth/\`
+          3. Place the downloaded files in this folder
+          4. Reload Obsidian and enable the plugin
+          
+          **🧪 BRAT Installation (Recommended for Beta Features):**
+          1. Install the BRAT plugin in Obsidian
+          2. Add this repository: \`muxammadreza/Obsyncth\`
+          3. Enable the plugin in your settings
+          
+          **✨ What's New:**
+          
+          $(git log --oneline $(git describe --tags --abbrev=0 HEAD^)..HEAD --pretty=format:'- %s')
+          
+          **📱 Platform Support:**
+          - ✅ Windows (with automatic Syncthing binary management)
+          - ✅ macOS (with automatic Syncthing binary management)  
+          - ✅ Linux (with automatic Syncthing binary management)
+          - ✅ Mobile (iOS/Android) via remote Syncthing instances
+          - 🐳 Docker support included
+          
+          **🔧 Key Features:**
+          - Cross-platform vault synchronization
+          - Automatic Syncthing binary download and management
+          - Real-time sync status monitoring
+          - Mobile-friendly remote connection support
+          - Docker containerized setup option
+          
+          ---
+          
+          For more information, visit the [GitHub repository](https://github.com/muxammadreza/Obsyncth)." \
+            main.js manifest.json styles.css
+
+      - name: Update release info
+        run: |
+          echo "✅ Released v${{ steps.version.outputs.version }}"
+          echo "📦 Assets: main.js, manifest.json, styles.css"
+          echo "🔗 Release URL: https://github.com/${{ github.repository }}/releases/tag/${{ steps.version.outputs.tag }}"

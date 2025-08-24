@@ -1,0 +1,126 @@
+name: Auto Release on Main Push
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'README.md'
+      - 'docs/**'
+      - '.github/**'
+
+jobs:
+  check-and-release:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check if version changed
+        id: version-check
+        run: |
+          CURRENT_VERSION=$(node -p "require('./package.json').version")
+          
+          # Get the latest tag
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          LATEST_VERSION=${LATEST_TAG#v}
+          
+          echo "current-version=${CURRENT_VERSION}" >> $GITHUB_OUTPUT
+          echo "latest-version=${LATEST_VERSION}" >> $GITHUB_OUTPUT
+          
+          if [ "$CURRENT_VERSION" != "$LATEST_VERSION" ]; then
+            echo "version-changed=true" >> $GITHUB_OUTPUT
+            echo "🆕 Version changed from ${LATEST_VERSION} to ${CURRENT_VERSION}"
+          else
+            echo "version-changed=false" >> $GITHUB_OUTPUT
+            echo "ℹ️ Version unchanged: ${CURRENT_VERSION}"
+          fi
+
+      - name: Build plugin
+        if: steps.version-check.outputs.version-changed == 'true'
+        run: npm run build
+
+      - name: Validate build artifacts
+        if: steps.version-check.outputs.version-changed == 'true'
+        run: |
+          if [ ! -f "main.js" ]; then
+            echo "❌ Build failed: main.js not found"
+            exit 1
+          fi
+          if [ ! -f "manifest.json" ]; then
+            echo "❌ Build failed: manifest.json not found"
+            exit 1
+          fi
+          echo "✅ Build artifacts validated successfully"
+
+      - name: Create and push tag
+        if: steps.version-check.outputs.version-changed == 'true'
+        run: |
+          VERSION=${{ steps.version-check.outputs.current-version }}
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git tag -a "v${VERSION}" -m "Release v${VERSION}"
+          git push origin "v${VERSION}"
+
+      - name: Create Release
+        if: steps.version-check.outputs.version-changed == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=${{ steps.version-check.outputs.current-version }}
+          
+          gh release create "v${VERSION}" \
+            --title "v${VERSION}" \
+            --notes "🚀 **Obsyncth v${VERSION}**
+          
+          Auto-release triggered by push to main branch.
+          
+          **Installation Methods:**
+          
+          **📦 Manual Installation:**
+          1. Download \`main.js\`, \`manifest.json\`, and \`styles.css\`
+          2. Create folder \`VaultFolder/.obsidian/plugins/obsyncth/\`
+          3. Place the downloaded files in this folder
+          4. Reload Obsidian and enable the plugin
+          
+          **🧪 BRAT Installation (Recommended):**
+          1. Install the BRAT plugin in Obsidian
+          2. Add this repository: \`muxammadreza/Obsyncth\`
+          3. Enable the plugin in your settings
+          
+          **✨ Recent Changes:**
+          
+          $(git log --oneline $(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo)..HEAD --pretty=format:'- %s' | head -10)
+          
+          **📱 Cross-Platform Support:**
+          - ✅ Windows, macOS, Linux (automatic Syncthing management)
+          - ✅ Mobile (iOS/Android) via remote Syncthing instances
+          - 🐳 Docker support included
+          
+          For more information, visit the [GitHub repository](https://github.com/muxammadreza/Obsyncth)." \
+            main.js manifest.json styles.css
+
+      - name: Release summary
+        if: steps.version-check.outputs.version-changed == 'true'
+        run: |
+          echo "🎉 Successfully released v${{ steps.version-check.outputs.current-version }}"
+          echo "📦 BRAT-compatible assets uploaded: main.js, manifest.json, styles.css"
+          echo "🔗 Release URL: https://github.com/${{ github.repository }}/releases/tag/v${{ steps.version-check.outputs.current-version }}"
+
+      - name: No release needed
+        if: steps.version-check.outputs.version-changed == 'false'
+        run: |
+          echo "ℹ️ No version change detected. Skipping release."
+          echo "Current version: ${{ steps.version-check.outputs.current-version }}"
