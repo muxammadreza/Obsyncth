@@ -23,9 +23,10 @@ data.json
 # Exclude macOS Finder (System Explorer) View States
 .DS_Store
 
-# Test files and temporary data
-test-*.js
+# Exclude only syncthing runtime config and logs
 Syncthing binary-config/syncthing-config/
 syncthing-config/
-syncthing.log
+*.log
+
+# Temporary files
 COMPLETION_SUMMARY.md

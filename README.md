@@ -51,6 +51,46 @@ For iOS/Android devices, enable "Mobile Mode" in settings and configure your rem
 
 Run Syncthing in an isolated container by enabling "Use Docker" in settings. This provides enhanced security by limiting Syncthing's file system access to only your vault directory.
 
+## 📁 Project Structure
+
+```
+Obsyncth/
+├── src/                          # Source code
+│   ├── main.ts                   # Main plugin code
+│   └── styles.css                # Plugin styles
+├── config/                       # Configuration files
+│   ├── esbuild.config.mjs        # Build configuration
+│   ├── tsconfig.json             # TypeScript configuration
+│   ├── .eslintrc                 # ESLint configuration
+│   ├── .eslintignore             # ESLint ignore patterns
+│   ├── .editorconfig             # Editor configuration
+│   └── .npmrc                    # NPM configuration
+├── build/                        # Build scripts
+│   └── version-bump.mjs          # Version management script
+├── scripts/                      # Release and utility scripts
+│   └── release.sh               # Release automation script
+├── tests/                        # Test files and debugging utilities
+│   ├── test-*.js                # Individual test scripts
+│   ├── debug-executable.js      # Debug utilities
+│   └── README.md                # Testing documentation
+├── docker/                       # Docker configuration
+│   ├── docker-compose.yaml      # Docker Compose setup
+│   ├── Dockerfile               # Container definition
+│   └── nginx.conf               # Nginx proxy configuration
+├── .github/                      # GitHub Actions workflows
+│   ├── workflows/               # CI/CD automation
+│   └── copilot-instructions.md  # AI assistant instructions
+├── Syncthing binary-config/      # Syncthing binaries and runtime
+│   ├── syncthing-linux          # Linux executable
+│   ├── syncthing-macos          # macOS executable
+│   ├── syncthing.exe            # Windows executable
+│   └── syncthing-config/        # Runtime configuration (gitignored)
+├── manifest.json                 # Obsidian plugin manifest
+├── versions.json                 # Version compatibility info
+├── package.json                  # Node.js dependencies and scripts
+└── README.md                     # This file
+```
+
 ## 🤝 Contributing
 
 Contributions are welcome! Please feel free to submit issues, feature requests, or pull requests.
