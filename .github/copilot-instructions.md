@@ -1,7 +1,9 @@
 # Obsyncth - AI Coding Agent Instructions
 
 ## Project Overview
-Obsyncth is a cross-platform Obsidian plugin that integrates Syncthing file synchronization. It features conditional Node.js imports for mobile compatibility, a sophisticated tabbed settings interface, and robust binary/configuration management with dynamic version handling.
+Obsyncth is a cross-platform Obsidian plugin that integrates Syncthing file synchronization. It features conditional Node.js imports for mobile compatibility, a sophisticated tabbed settings interface, robust binary/configuration management with dynamic version handling, and comprehensive testing infrastructure.
+
+**Key Stats**: ~3,335 lines of TypeScript code in main plugin file, 12 test scripts, 5 GitHub Actions workflows, comprehensive Docker support.
 
 ## Core Architecture
 
@@ -135,7 +137,14 @@ Syncthing executables are stored in `"Syncthing binary-config/"` with platform-s
 - macOS: `syncthing-macos` 
 - Linux: `syncthing-linux`
 
-Binary download/extraction uses platform-specific archive handling (ZIP/TAR.GZ) with executable validation. The `extractAndInstallSyncthing()` function MUST use the same folder path as `getSyncthingExecutablePath()` to ensure downloaded binaries are found correctly.
+The binary management system includes:
+- **Intelligent Asset Selection**: Automatically selects correct platform-specific archives from GitHub releases
+- **Robust Extraction**: Handles both ZIP (Windows/macOS) and TAR.GZ (Linux) archives with recursive executable finding
+- **Executable Validation**: Verifies file size, permissions, and architecture compatibility
+- **Smart Cleanup**: Removes extracted directory structure while preserving renamed executables
+- **Fallback Handling**: Graceful degradation when auto-download fails
+
+Binary download/extraction uses platform-specific archive handling with executable validation. The `extractAndInstallSyncthing()` function MUST use the same folder path as `getSyncthingExecutablePath()` to ensure downloaded binaries are found correctly.
 
 ### Configuration Management
 Syncthing configuration is stored in `"Syncthing binary-config/syncthing-config/"` using the `--home` parameter:
@@ -144,6 +153,13 @@ Syncthing configuration is stored in `"Syncthing binary-config/syncthing-config/
 const configDir = `${this.getPluginAbsolutePath()}Syncthing binary-config/syncthing-config`;
 const args = ['--home', configDir, '--no-browser', '--gui-address', `127.0.0.1:${port}`];
 ```
+
+**Enhanced Directory Creation**: The system includes robust directory creation with proper error handling:
+- Creates parent `Syncthing binary-config/` directory first
+- Then creates `syncthing-config/` subdirectory
+- Verifies each step before proceeding
+- Handles filesystem delays and permission issues
+- Provides descriptive error messages for troubleshooting
 
 ### Settings Persistence
 Settings auto-save triggers monitor restart:
@@ -155,11 +171,24 @@ async saveSettings() {
 }
 ```
 
+**Auto-Save Implementation**: All configuration fields have immediate persistence:
+- API key input with auto-save on change
+- Folder ID input with auto-save on change  
+- Checkbox settings with immediate persistence
+- Prevents configuration loss when switching tabs
+- No manual save button required
+
 ### Connection Modes
 Three operational modes with different URL resolution:
 1. **Desktop**: `http://127.0.0.1:8384` (local binary)
 2. **Mobile/Remote**: Uses `settings.remoteUrl`
 3. **Docker**: `http://127.0.0.1:8380/` (containerized with CORS proxy)
+
+**Network Communication**: Uses IPv4 addressing exclusively to prevent connection issues:
+- All localhost connections forced to `127.0.0.1` (IPv4)
+- Converts any IPv6 `::1` addresses to IPv4 `127.0.0.1`
+- Prevents `ECONNREFUSED ::1:8384` errors
+- Consistent addressing across all monitoring methods
 
 ## File Organization
 
@@ -222,22 +251,40 @@ The build shows TypeScript warnings about implicit 'any' types - these are **non
 The plugin handles BRAT beta installations (e.g., `obsyncth-1.5.6-beta.7`) through dynamic folder detection that finds the actual plugin directory containing `main.js`. The testing release workflow automatically updates manifest.json with beta versions to maintain BRAT compatibility.
 
 ### Mobile Compatibility
-- All Node.js operations must check `platformInfo.isDesktop`
+- All Node.js operations must check `detectMobilePlatform()`
 - Provide meaningful fallbacks for mobile users
 - Use `SimpleEventEmitter` class when Node.js EventEmitter unavailable
 
 ### Status Monitoring
 The monitoring system uses different approaches:
-- Desktop: Node.js HTTP polling of localhost
+- Desktop: Node.js HTTP polling of localhost with IPv4 addressing
 - Mobile: Fetch API to remote Syncthing instance
 
 Always test both modes when modifying status-related code.
 
+### Network Connectivity Issues
+**IPv4 vs IPv6**: The plugin forces IPv4 localhost (`127.0.0.1`) for all local connections to prevent `ECONNREFUSED ::1:8384` errors. All hostname resolution converts IPv6 `::1` back to IPv4 `127.0.0.1`.
+
+### Directory Creation Edge Cases
+The enhanced directory creation system handles:
+- Parent directory creation before subdirectories
+- Filesystem sync delays and race conditions  
+- Permission validation and error recovery
+- Descriptive error messages for troubleshooting
+
 ### Testing Infrastructure
 The `tests/` folder contains comprehensive test scripts and debugging utilities:
-- **test-*.js**: Individual test scripts for different plugin functionality
-- **debug-executable.js**: Debug utilities for executable path resolution
-- **README.md**: Documentation for test organization and future improvements
+- **test-asset-selection.js**: Tests GitHub API asset selection and platform-specific filtering
+- **test-config-path.js**: Tests configuration path construction and validation
+- **test-directory-creation.js**: Tests robust directory creation with error handling
+- **test-download.js**: Tests Syncthing binary download and extraction functionality
+- **test-edge-cases.js**: Tests edge cases, error conditions, and recovery scenarios
+- **test-executable-finder.js**: Tests recursive executable detection and validation logic
+- **test-executable.js**: Tests executable permissions, architecture, and functionality
+- **test-http.js**: Tests HTTP communication, IPv4/IPv6 handling, and API connectivity
+- **test-monitor.js**: Tests status monitoring, event handling, and connection management
+- **test-startup-sequence.js**: Tests plugin initialization and Syncthing startup detection
+- **debug-executable.js**: Debug utility for platform detection and path resolution
 
 Tests are currently standalone Node.js scripts. Run them individually:
 ```bash
@@ -245,6 +292,15 @@ node tests/test-executable.js
 node tests/test-monitor.js
 # etc.
 ```
+
+**Test Coverage Areas**:
+- Platform detection and conditional imports
+- Binary management and extraction
+- Directory creation and permissions
+- Network connectivity and monitoring
+- Error handling and edge cases
+- GitHub API integration
+- Configuration management
 
 ## Debugging
 Use the Advanced tab's "View Logs" button which outputs diagnostic info to browser console with settings, platform info, and executable paths.
@@ -291,13 +347,18 @@ The `scripts/release.sh` handles version synchronization, building, git tagging,
   - Triggered on pushes to the `main` branch when version changes are detected.
   - Automatically creates stable releases with proper BRAT-compatible assets.
 
-- **Tag-based Release Workflow** (`stable-release.yaml`):
+- **Stable Release Workflow** (`stable-release.yaml`):
   - Triggered when version tags (e.g., `v1.5.5`) are pushed.
   - Creates final stable releases with comprehensive release notes.
+
+- **Manual Release Workflow** (`manual-release.yaml`):
+  - Allows manual version specification and release creation.
+  - Supports semantic versioning (patch, minor, major).
 
 - **Validation Workflow** (`validate.yaml`):
   - Validates workflow syntax and BRAT compatibility requirements.
   - Ensures `manifest.json` has all required fields.
+  - Runs on PR and push to main/dev branches affecting workflows.
 
 ### BRAT Compatibility Features
 All workflows now ensure:
@@ -307,6 +368,19 @@ All workflows now ensure:
 - ✅ Cross-platform support documentation
 - ✅ Semantic versioning compliance
 - ✅ Automatic manifest.json version updates for beta releases
+
+### Release Management
+**Release Script** (`scripts/release.sh`):
+- Automated release management with BRAT compatibility
+- Handles version bumping across all files (package.json, manifest.json, versions.json)
+- Validates build artifacts and creates GitHub releases
+- Supports semantic versioning (patch, minor, major)
+- Git tagging and push automation
+
+**Version Management** (`build/version-bump.mjs`):
+- Synchronizes version numbers across manifest.json and versions.json
+- Maintains compatibility matrix for different Obsidian versions
+- Integrates with npm version commands
 
 ### Installation Methods for Users
 **BRAT Installation (Recommended):**
@@ -318,3 +392,34 @@ All workflows now ensure:
 1. Download release assets from GitHub
 2. Extract to `.obsidian/plugins/obsyncth/`
 3. Enable in Community Plugins
+
+## Docker Support
+**Docker Compose Configuration** (`docker/docker-compose.yaml`):
+- Containerized Syncthing with CORS proxy setup
+- Nginx proxy for web interface access
+- Isolated environment with configurable user permissions
+- Environment-based configuration support
+
+**Key Features**:
+- Port 8380 for plugin access (vs 8384 for direct Syncthing)
+- CORS headers for cross-origin requests
+- User/group ID configuration for file permissions
+- Automatic restart policies
+
+## Dependencies and Package Management
+**Core Dependencies**:
+- `axios`: HTTP client for API communication
+- `tree-kill`: Process management for Syncthing cleanup
+
+**Development Dependencies**:
+- TypeScript ecosystem with strict null checks
+- ESLint configuration with TypeScript rules
+- esbuild for fast compilation and bundling
+- Node.js type definitions for development
+
+**Package Scripts**:
+- `dev`: Watch mode development with esbuild
+- `build`: Production build with TypeScript checking
+- `build:ci`: CI-friendly build (warnings only)
+- `version`: Automated version management
+- `release:*`: Semantic version release scripts
