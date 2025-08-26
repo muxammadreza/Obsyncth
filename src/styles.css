@@ -238,6 +238,22 @@ If your plugin does not need CSS, delete this file.
     line-height: 1.5;
 }
 
+/* Auth subsection styling */
+.syncthing-auth-section {
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border-hover);
+    border-radius: 6px;
+    padding: 16px;
+    margin-top: 16px;
+}
+
+.syncthing-subsection-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-normal);
+    margin: 0 0 12px 0;
+}
+
 /* Form Controls */
 .syncthing-form-group {
     margin-bottom: 20px;

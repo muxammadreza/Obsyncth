@@ -41,6 +41,18 @@ function detectMobilePlatform(): boolean {
 	return false;
 }
 
+// Polyfill for AbortSignal.timeout if not available
+function createTimeoutSignal(timeout: number): AbortSignal {
+	if (typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal) {
+		return (AbortSignal as any).timeout(timeout);
+	}
+	
+	// Fallback implementation
+	const controller = new AbortController();
+	setTimeout(() => controller.abort(), timeout);
+	return controller.signal;
+}
+
 // Conditional imports for desktop-only functionality
 let spawn: any, exec: any, readFileSync: any, writeFileSync: any, http: any;
 let fs: any, path: any, childProcess: any, treeKill: any, https: any, urlModule: any;
@@ -169,6 +181,8 @@ interface Settings {
 	useDocker: boolean;
 	remoteUrl: string;
 	mobileMode: boolean;
+	remoteUsername: string;
+	remotePassword: string;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -179,6 +193,8 @@ const DEFAULT_SETTINGS: Settings = {
 	useDocker: false,
 	remoteUrl: 'http://127.0.0.1:8384',
 	mobileMode: false,
+	remoteUsername: '',
+	remotePassword: '',
 }
 
 interface SyncthingEvent {
@@ -207,6 +223,9 @@ class SyncthingMonitor extends EventEmitter {
 	private pollingTimeoutId: NodeJS.Timeout | undefined;
 	private isTokenSet: boolean = false;
 	private baseUrl: string = 'http://127.0.0.1:8384';
+	private isMobileMode: boolean = false;
+	private remoteUsername: string = '';
+	private remotePassword: string = '';
 	
 	public status: string = "idle";
 	public connectedDevicesCount: number = 0;
@@ -217,20 +236,46 @@ class SyncthingMonitor extends EventEmitter {
 
 	public setStatusIcon: (icon: string) => void = () => {};
 
+	/**
+	 * Create authentication headers for mobile/remote requests
+	 */
+	private createAuthHeaders(): HeadersInit {
+		const headers: HeadersInit = {
+			'X-API-Key': this.token || '',
+		};
+
+		// Add basic authentication if username/password are provided
+		if (this.remoteUsername && this.remotePassword) {
+			const credentials = btoa(`${this.remoteUsername}:${this.remotePassword}`);
+			headers['Authorization'] = `Basic ${credentials}`;
+		}
+
+		return headers;
+	}
+
 	public startMonitoring(
 		settings: Settings, 
 		setStatusIcon: (icon: string) => void,
-		baseUrl: string
+		baseUrl: string,
+		isMobileMode: boolean = false
 	) {
 		this.token = settings.syncthingApiKey;
 		this.timeout = 1; // Use 1 second polling for responsiveness
 		this.setStatusIcon = setStatusIcon;
 		this.isTokenSet = !!settings.syncthingApiKey;
 		this.baseUrl = baseUrl;
+		this.isMobileMode = isMobileMode;
+		this.remoteUsername = settings.remoteUsername;
+		this.remotePassword = settings.remotePassword;
 
 		if (this.isTokenSet) {
-			this.poll();
-			this.checkConnections();
+			if (this.isMobileMode) {
+				this.pollMobile();
+				this.checkConnectionsMobile();
+			} else {
+				this.poll();
+				this.checkConnections();
+			}
 		} else {
 			this.status = "API key not set";
 			this.setStatusIcon('❌');
@@ -291,10 +336,10 @@ class SyncthingMonitor extends EventEmitter {
 			}
 		};
 
-		const req = http.request(options, (res) => {
+		const req = http.request(options, (res: any) => {
 			let body = '';
 
-			res.on('data', chunk => {
+			res.on('data', (chunk: any) => {
 				body += chunk;
 			});
 
@@ -343,7 +388,7 @@ class SyncthingMonitor extends EventEmitter {
 			});
 		});
 
-		req.on('error', (err) => {
+		req.on('error', (err: any) => {
 			console.error('Syncthing connection error:', err);
 			this.status = "Connection error";
 			this.setStatusIcon('❌');
@@ -434,10 +479,10 @@ class SyncthingMonitor extends EventEmitter {
 			}
 		};
 
-		const req = http.request(options, (res) => {
+		const req = http.request(options, (res: any) => {
 			let body = '';
 
-			res.on('data', chunk => {
+			res.on('data', (chunk: any) => {
 				body += chunk;
 			});
 
@@ -479,7 +524,7 @@ class SyncthingMonitor extends EventEmitter {
 			});
 		});
 
-		req.on('error', (err) => {
+		req.on('error', (err: any) => {
 			console.error('Syncthing connections API error:', err);
 		});
 
@@ -508,12 +553,12 @@ class SyncthingMonitor extends EventEmitter {
 				timeout: 2000, // 2 second timeout
 			};
 
-			const req = http.request(options, (res) => {
+			const req = http.request(options, (res: any) => {
 				// If we get any response, Syncthing is running
 				resolve(true);
 			});
 
-			req.on('error', (err) => {
+			req.on('error', (err: any) => {
 				console.log('Syncthing connection error:', err.message);
 				// ECONNREFUSED means definitely not running
 				if (err.message.includes('ECONNREFUSED')) {
@@ -531,6 +576,117 @@ class SyncthingMonitor extends EventEmitter {
 
 			req.end();
 		});
+	}
+
+	/**
+	 * Mobile-compatible polling using fetch API
+	 */
+	private async pollMobile() {
+		const lastId = this.lastEventId ?? 0;
+
+		if (!this.token) {
+			console.error('Syncthing API token is not set. Cannot poll for events.');
+			this.status = "API key not set";
+			this.emit('status-update', {
+				status: this.status,
+				fileCompletion: NaN,
+				globalItems: NaN,
+				needItems: NaN,
+				connectedDevicesCount: NaN,
+				availableDevices: NaN
+			});
+			return;
+		}
+
+		try {
+			const response = await fetch(`${this.baseUrl}/rest/events?since=${lastId}&timeout=${this.timeout}`, {
+				method: 'GET',
+				headers: this.createAuthHeaders(),
+			});
+
+			if (response.status === 401) {
+				console.error('Syncthing API key is invalid (401 Unauthorized).');
+				this.status = "Invalid API key";
+				this.setStatusIcon('❌');
+				this.emit('status-update', {
+					status: this.status,
+					fileCompletion: NaN,
+					globalItems: NaN,
+					needItems: NaN,
+					connectedDevicesCount: NaN,
+					availableDevices: NaN
+				});
+				setTimeout(() => this.pollMobile(), 5000);
+				return;
+			}
+
+			if (response.ok) {
+				const events = await response.json();
+
+				if (Array.isArray(events)) {
+					for (const event of events) {
+						this.lastEventId = Math.max(this.lastEventId ?? 0, event.id);
+						this.processEvent(event);
+					}
+				}
+			}
+		} catch (error) {
+			console.error('Mobile Syncthing connection error:', error);
+			this.status = "Connection error";
+			this.setStatusIcon('❌');
+		} finally {
+			this.checkConnectionsMobile();
+			this.emit('status-update', {
+				status: this.status,
+				fileCompletion: this.fileCompletion,
+				globalItems: this.globalItems,
+				needItems: this.needItems,
+				connectedDevicesCount: this.connectedDevicesCount,
+				availableDevices: this.availableDevices
+			});
+			setTimeout(() => this.pollMobile(), this.timeout * 1000);
+		}
+	}
+
+	/**
+	 * Mobile-compatible connection checking using fetch API
+	 */
+	private async checkConnectionsMobile() {
+		try {
+			const response = await fetch(`${this.baseUrl}/rest/system/connections`, {
+				method: 'GET',
+				headers: this.createAuthHeaders(),
+			});
+
+			if (response.ok) {
+				const connectionsData = await response.json() as ConnectionsResponse;
+				const connections = connectionsData.connections || {};
+				
+				this.connectedDevicesCount = Object.values(connections).filter(connection => connection.connected).length;
+				this.availableDevices = Object.keys(connections).length;
+			}
+		} catch (error) {
+			console.error('Error checking mobile connections:', error);
+		}
+	}
+
+	/**
+	 * Mobile-compatible status check using fetch API
+	 */
+	public async isSyncthingRunningMobile(): Promise<boolean> {
+		try {
+			const response = await fetch(`${this.baseUrl}/rest/system/status`, {
+				method: 'GET',
+				headers: this.createAuthHeaders(),
+				// Add a timeout using AbortController
+				signal: createTimeoutSignal(5000) // 5 second timeout
+			});
+			
+			return response.ok;
+		} catch (error) {
+			console.log('Mobile Syncthing connection error:', error);
+			return false;
+		}
 	}
 }
 
@@ -627,7 +783,8 @@ export default class Obsyncth extends Plugin {
 			
 			// Still try to monitor basic connectivity for first-run scenarios
 			const baseUrl = this.getSyncthingURL();
-			this.monitor.startMonitoring(this.settings, this.setStatusIcon, baseUrl);
+			const isMobileMode = this.isMobile || this.settings.mobileMode;
+			this.monitor.startMonitoring(this.settings, this.setStatusIcon, baseUrl, isMobileMode);
 			
 			// Show a helpful notice for first-time users
 			new Notice('Syncthing is running! Please configure your API key in the plugin settings to enable full functionality.', 8000);
@@ -644,10 +801,11 @@ export default class Obsyncth extends Plugin {
 		}
 
 		const baseUrl = this.getSyncthingURL();
-		this.monitor.startMonitoring(this.settings, this.setStatusIcon, baseUrl);
+		const isMobileMode = this.isMobile || this.settings.mobileMode;
+		this.monitor.startMonitoring(this.settings, this.setStatusIcon, baseUrl, isMobileMode);
 
 		// Listen for status updates
-		this.monitor.on('status-update', (data) => {
+		this.monitor.on('status-update', (data: any) => {
 			// Update status bar with real-time information
 			this.updateStatusBarFromMonitor(data);
 		});
@@ -1014,6 +1172,12 @@ export default class Obsyncth extends Plugin {
 	 * Get Syncthing config using Node.js HTTP
 	 */
 	async getSyncthingConfig(): Promise<any> {
+		// Use mobile-compatible method if on mobile or mobile mode
+		if (this.isMobile || this.settings.mobileMode) {
+			return await this.getSyncthingConfigMobile();
+		}
+
+		// Desktop method using Node.js HTTP
 		return new Promise((resolve, reject) => {
 			if (!this.settings.syncthingApiKey) {
 				reject(new Error('API key not set'));
@@ -1038,9 +1202,9 @@ export default class Obsyncth extends Plugin {
 				}
 			};
 
-			const req = http.request(options, (res) => {
+			const req = http.request(options, (res: any) => {
 				let body = '';
-				res.on('data', chunk => body += chunk);
+				res.on('data', (chunk: any) => body += chunk);
 				res.on('end', () => {
 					try {
 						resolve(JSON.parse(body));
@@ -1056,9 +1220,15 @@ export default class Obsyncth extends Plugin {
 	}
 
 	/**
-	 * Update Syncthing config using Node.js HTTP
+	 * Update Syncthing config using appropriate method based on platform
 	 */
 	async updateSyncthingConfig(config: any): Promise<boolean> {
+		// Use mobile-compatible method if on mobile or mobile mode
+		if (this.isMobile || this.settings.mobileMode) {
+			return await this.updateSyncthingConfigMobile(config);
+		}
+
+		// Desktop method using Node.js HTTP
 		return new Promise((resolve) => {
 			if (!this.settings.syncthingApiKey) {
 				resolve(false);
@@ -1086,7 +1256,7 @@ export default class Obsyncth extends Plugin {
 				}
 			};
 
-			const req = http.request(options, (res) => {
+			const req = http.request(options, (res: any) => {
 				resolve(res.statusCode === 200);
 			});
 
@@ -1290,9 +1460,95 @@ export default class Obsyncth extends Plugin {
 	}
 
 	/**
+	 * Create authentication headers for mobile/remote requests
+	 */
+	private createAuthHeaders(): HeadersInit {
+		const headers: HeadersInit = {
+			'X-API-Key': this.settings.syncthingApiKey,
+		};
+
+		// Add basic authentication if username/password are provided
+		if (this.settings.remoteUsername && this.settings.remotePassword) {
+			const credentials = btoa(`${this.settings.remoteUsername}:${this.settings.remotePassword}`);
+			headers['Authorization'] = `Basic ${credentials}`;
+		}
+
+		return headers;
+	}
+
+	/**
+	 * Mobile-compatible Syncthing status check using fetch
+	 */
+	async isSyncthingRunningMobile(): Promise<boolean> {
+		try {
+			const url = this.getSyncthingURL();
+			const response = await fetch(`${url}/rest/system/status`, {
+				method: 'GET',
+				headers: this.createAuthHeaders(),
+				// Add a timeout using AbortController
+				signal: createTimeoutSignal(5000) // 5 second timeout
+			});
+			
+			return response.ok;
+		} catch (error) {
+			console.log('Mobile Syncthing connection error:', error);
+			return false;
+		}
+	}
+
+	/**
+	 * Mobile-compatible config retrieval using fetch
+	 */
+	async getSyncthingConfigMobile(): Promise<any> {
+		try {
+			const url = this.getSyncthingURL();
+			const response = await fetch(`${url}/rest/config`, {
+				method: 'GET',
+				headers: this.createAuthHeaders(),
+			});
+			
+			if (!response.ok) {
+				throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+			}
+			
+			return await response.json();
+		} catch (error) {
+			console.error('Failed to get Syncthing config via mobile API:', error);
+			throw error;
+		}
+	}
+
+	/**
+	 * Mobile-compatible config update using fetch
+	 */
+	async updateSyncthingConfigMobile(config: any): Promise<boolean> {
+		try {
+			const url = this.getSyncthingURL();
+			const response = await fetch(`${url}/rest/config`, {
+				method: 'POST',
+				headers: {
+					...this.createAuthHeaders(),
+					'Content-Type': 'application/json',
+				},
+				body: JSON.stringify(config),
+			});
+			
+			return response.ok;
+		} catch (error) {
+			console.error('Failed to update Syncthing config via mobile API:', error);
+			return false;
+		}
+	}
+
+	/**
 	 * Use the monitor's improved status detection
 	 */
 	async isSyncthingRunning(): Promise<boolean> {
+		// Use mobile-compatible method if on mobile or mobile mode
+		if (this.isMobile || this.settings.mobileMode) {
+			return await this.isSyncthingRunningMobile();
+		}
+		// Use desktop method otherwise
 		return await this.monitor.isSyncthingRunning();
 	}
 
@@ -2158,9 +2414,9 @@ export default class Obsyncth extends Plugin {
 				}
 			};
 
-			const req = http.request(options, (res) => {
+			const req = http.request(options, (res: any) => {
 				let body = '';
-				res.on('data', chunk => body += chunk);
+				res.on('data', (chunk: any) => body += chunk);
 				res.on('end', () => {
 					try {
 						const data = JSON.parse(body);
@@ -2176,7 +2432,7 @@ export default class Obsyncth extends Plugin {
 				});
 			});
 
-			req.on('error', (error) => {
+			req.on('error', (error: any) => {
 				console.error('Failed to get last sync date:', error);
 				resolve(null);
 			});
@@ -2534,6 +2790,40 @@ class SettingTab extends PluginSettingTab {
 			await this.plugin.saveSettings();
 		});
 
+		// Remote Authentication Section
+		const authSection = modeSection.createDiv('syncthing-auth-section');
+		authSection.createEl('h4', { cls: 'syncthing-subsection-title', text: 'Remote Authentication (Optional)' });
+		authSection.createDiv({
+			cls: 'syncthing-help-text',
+			text: 'If your remote Syncthing requires basic authentication, enter credentials below:'
+		});
+
+		const usernameGroup = authSection.createDiv('syncthing-form-group');
+		usernameGroup.createEl('label', { cls: 'syncthing-label', text: 'Username' });
+		const usernameInput = usernameGroup.createEl('input', {
+			cls: 'syncthing-input',
+			attr: { type: 'text', value: this.plugin.settings.remoteUsername, placeholder: 'username' }
+		});
+
+		// Auto-save username on input
+		usernameInput.addEventListener('input', async () => {
+			this.plugin.settings.remoteUsername = usernameInput.value;
+			await this.plugin.saveSettings();
+		});
+
+		const passwordGroup = authSection.createDiv('syncthing-form-group');
+		passwordGroup.createEl('label', { cls: 'syncthing-label', text: 'Password' });
+		const passwordInput = passwordGroup.createEl('input', {
+			cls: 'syncthing-input',
+			attr: { type: 'password', value: this.plugin.settings.remotePassword, placeholder: 'password' }
+		});
+
+		// Auto-save password on input
+		passwordInput.addEventListener('input', async () => {
+			this.plugin.settings.remotePassword = passwordInput.value;
+			await this.plugin.saveSettings();
+		});
+
 		// Startup Configuration Section
 		const startupSection = container.createDiv('syncthing-section');
 		startupSection.createEl('h3', { cls: 'syncthing-section-title', text: '🚀 Startup Configuration' });
@@ -2627,15 +2917,24 @@ class SettingTab extends PluginSettingTab {
 				testConnBtn.textContent = '⏳ Testing...';
 				
 				const url = this.plugin.getSyncthingURL();
+				// Create auth headers with API key and optional basic auth
+				const headers: HeadersInit = {
+					'X-API-Key': this.plugin.settings.syncthingApiKey
+				};
+
+				// Add basic authentication if username/password are provided
+				if (this.plugin.settings.remoteUsername && this.plugin.settings.remotePassword) {
+					const credentials = btoa(`${this.plugin.settings.remoteUsername}:${this.plugin.settings.remotePassword}`);
+					headers['Authorization'] = `Basic ${credentials}`;
+				}
+
 				// Simple connection test - just try to get system status
-				const response = await fetch(`${url}/rest/system/status`, {
-					headers: {
-						'X-API-Key': this.plugin.settings.syncthingApiKey
-					}
-				});
+				const response = await fetch(`${url}/rest/system/status`, { headers });
 				
 				if (response.ok) {
 					new Notice('✅ Connection successful');
+				} else if (response.status === 401) {
+					new Notice(`❌ Authentication failed. Check your API key and credentials.`);
 				} else {
 					new Notice(`❌ Connection failed to ${url} (${response.status})`);
 				}
