@@ -171,6 +171,9 @@ interface Settings {
 	mobileMode: boolean;
 	remoteUsername: string;
 	remotePassword: string;
+	encryptionEnabled: boolean;
+	encryptionPassword: string;
+	allowHiddenFiles: boolean;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -183,6 +186,9 @@ const DEFAULT_SETTINGS: Settings = {
 	mobileMode: false,
 	remoteUsername: '',
 	remotePassword: '',
+	encryptionEnabled: false,
+	encryptionPassword: '',
+	allowHiddenFiles: true,
 }
 
 interface SyncthingEvent {
@@ -752,6 +758,18 @@ export default class Obsyncth extends Plugin {
 		{
 			this.startSyncthing();
 		}
+
+		// Check for encryption mismatches after initialization
+		// Add a delay to ensure Syncthing is ready
+		setTimeout(async () => {
+			if (this.settings.syncthingApiKey && !this.isMobile && !this.settings.mobileMode) {
+				try {
+					await this.checkAndFixEncryptionMismatch();
+				} catch (error) {
+					console.log('Initial encryption check skipped (Syncthing may not be running yet)');
+				}
+			}
+		}, 5000);
 
 		// Register on Obsidian close handler 
 		window.addEventListener('beforeunload', this.handleBeforeUnload.bind(this));
@@ -1560,6 +1578,221 @@ export default class Obsyncth extends Plugin {
 		});
 
 		return true;
+	}
+
+	/**
+	 * Apply encryption settings to a folder configuration
+	 */
+	applyEncryptionSettings(folderConfig: any, deviceId: string): any {
+		if (!folderConfig.devices) {
+			folderConfig.devices = [];
+		}
+
+		// Find or create device entry for this folder
+		let deviceEntry = folderConfig.devices.find((d: any) => d.deviceID === deviceId);
+		if (!deviceEntry) {
+			deviceEntry = {
+				deviceID: deviceId,
+				introducedBy: "",
+				encryptionPassword: ""
+			};
+			folderConfig.devices.push(deviceEntry);
+		}
+
+		// Apply encryption settings based on user preferences
+		if (this.settings.encryptionEnabled && this.settings.encryptionPassword) {
+			deviceEntry.encryptionPassword = this.settings.encryptionPassword;
+		} else {
+			deviceEntry.encryptionPassword = "";
+		}
+
+		return folderConfig;
+	}
+
+	/**
+	 * Get iOS-compatible vault path that works with Files app
+	 */
+	getIOSCompatibleVaultPath(): string {
+		if (!this.isMobile) {
+			return this.vaultPath;
+		}
+
+		// On iOS, ensure we're using the Files app accessible path
+		const vaultPath = this.vaultPath;
+		
+		// If path contains Obsidian's iOS container path, it should be accessible
+		if (vaultPath.includes('Documents/') || vaultPath.includes('iCloud/')) {
+			return vaultPath;
+		}
+
+		// For other cases, log guidance for user
+		console.warn('iOS Vault Path Notice: Ensure your vault is accessible via Files app for Syncthing sync');
+		new Notice('For iOS sync: Vault must be accessible via Files app. Consider moving vault to iCloud Drive or On My iPhone/iPad location.', 10000);
+		
+		return vaultPath;
+	}
+
+	/**
+	 * Configure Syncthing folder with proper encryption and iOS compatibility
+	 */
+	async configureFolderForDevice(folderId: string, folderPath: string, deviceId: string): Promise<boolean> {
+		try {
+			const config = await this.getSyncthingConfig();
+			
+			// Find or create the folder
+			let folder = config.folders.find((f: any) => f.id === folderId);
+			if (!folder) {
+				// Create new folder configuration
+				folder = {
+					id: folderId,
+					label: folderId,
+					path: this.isMobile ? this.getIOSCompatibleVaultPath() : folderPath,
+					type: "sendreceive",
+					devices: [],
+					rescanIntervalS: 3600,
+					fsWatcherEnabled: true,
+					ignorePerms: false,
+					autoNormalize: true,
+					paused: false
+				};
+				config.folders.push(folder);
+			}
+
+			// Apply encryption settings
+			folder = this.applyEncryptionSettings(folder, deviceId);
+
+			// For iOS, add specific configurations
+			if (this.isMobile && this.settings.allowHiddenFiles) {
+				// Configure Syncthing to handle hidden files properly on iOS
+				if (!folder.ignorePatterns) {
+					folder.ignorePatterns = [];
+				}
+				
+				// Remove default hidden file ignores if user wants to sync them
+				folder.ignorePatterns = folder.ignorePatterns.filter((pattern: string) => 
+					!pattern.startsWith('.*') && !pattern.includes('/.*')
+				);
+				
+				console.log('iOS: Configured folder to sync hidden files for better compatibility');
+			}
+
+			// Update the configuration
+			return await this.updateSyncthingConfig(config);
+		} catch (error) {
+			console.error('Failed to configure folder for device:', error);
+			return false;
+		}
+	}
+
+	/**
+	 * Check and fix encryption mismatches across devices
+	 */
+	async checkAndFixEncryptionMismatch(): Promise<boolean> {
+		try {
+			const config = await this.getSyncthingConfig();
+			let hasChanges = false;
+			
+			// Check each folder for encryption consistency
+			for (const folder of config.folders) {
+				const encryptionStates = new Set();
+				
+				// Check encryption state for each device in this folder
+				for (const device of folder.devices || []) {
+					const hasEncryption = device.encryptionPassword && device.encryptionPassword.length > 0;
+					encryptionStates.add(hasEncryption);
+				}
+				
+				// If we have mixed encryption states, this is likely the cause of the error
+				if (encryptionStates.size > 1) {
+					console.warn(`Encryption mismatch detected in folder ${folder.id}`);
+					new Notice(`Encryption mismatch detected in folder "${folder.id}". Synchronizing encryption settings...`, 8000);
+					
+					// Fix by applying current settings to all devices
+					for (const device of folder.devices || []) {
+						if (this.settings.encryptionEnabled && this.settings.encryptionPassword) {
+							device.encryptionPassword = this.settings.encryptionPassword;
+						} else {
+							device.encryptionPassword = "";
+						}
+					}
+					hasChanges = true;
+				}
+			}
+
+			// Also check and fix the defaults section to prevent future mismatches
+			if (config.defaults && config.defaults.folder) {
+				const defaultFolder = config.defaults.folder;
+				if (defaultFolder.device && defaultFolder.device.encryptionPassword !== undefined) {
+					if (this.settings.encryptionEnabled && this.settings.encryptionPassword) {
+						if (defaultFolder.device.encryptionPassword !== this.settings.encryptionPassword) {
+							defaultFolder.device.encryptionPassword = this.settings.encryptionPassword;
+							hasChanges = true;
+						}
+					} else {
+						if (defaultFolder.device.encryptionPassword !== "") {
+							defaultFolder.device.encryptionPassword = "";
+							hasChanges = true;
+						}
+					}
+				}
+			}
+			
+			// Update configuration if changes were made
+			if (hasChanges) {
+				console.log('Applying encryption configuration fixes...');
+				const updateSuccess = await this.updateSyncthingConfig(config);
+				if (updateSuccess) {
+					new Notice('✅ Encryption settings synchronized successfully', 5000);
+				}
+				return updateSuccess;
+			} else {
+				console.log('No encryption mismatches found');
+				return true;
+			}
+		} catch (error) {
+			console.error('Failed to check encryption mismatch:', error);
+			return false;
+		}
+	}
+
+	/**
+	 * Remove hardcoded encryption from configuration
+	 */
+	async removeHardcodedEncryption(): Promise<boolean> {
+		try {
+			const config = await this.getSyncthingConfig();
+			let hasChanges = false;
+
+			// Remove encryption from all folders if user has disabled it
+			if (!this.settings.encryptionEnabled) {
+				for (const folder of config.folders) {
+					for (const device of folder.devices || []) {
+						if (device.encryptionPassword && device.encryptionPassword.length > 0) {
+							device.encryptionPassword = "";
+							hasChanges = true;
+						}
+					}
+				}
+
+				// Also clear defaults
+				if (config.defaults && config.defaults.folder && config.defaults.folder.device) {
+					if (config.defaults.folder.device.encryptionPassword) {
+						config.defaults.folder.device.encryptionPassword = "";
+						hasChanges = true;
+					}
+				}
+
+				if (hasChanges) {
+					console.log('Removing hardcoded encryption settings...');
+					return await this.updateSyncthingConfig(config);
+				}
+			}
+
+			return true;
+		} catch (error) {
+			console.error('Failed to remove hardcoded encryption:', error);
+			return false;
+		}
 	}
 
 	updateStatusBar(): void {
@@ -2844,6 +3077,126 @@ class SettingTab extends PluginSettingTab {
 			await this.plugin.saveSettings();
 		});
 
+		// Encryption Configuration Section
+		const encryptionSection = container.createDiv('syncthing-section');
+		encryptionSection.createEl('h3', { cls: 'syncthing-section-title', text: '🔒 Encryption Configuration' });
+		encryptionSection.createDiv({
+			cls: 'syncthing-section-description',
+			text: 'Configure folder encryption settings. IMPORTANT: All devices sharing a folder must use the same encryption settings to avoid sync errors.'
+		});
+
+		const encryptionEnabledGroup = encryptionSection.createDiv('syncthing-form-group');
+		const encryptionEnabledCheckbox = encryptionEnabledGroup.createEl('label', { cls: 'syncthing-checkbox' });
+		const encryptionEnabledInput = encryptionEnabledCheckbox.createEl('input', { attr: { type: 'checkbox' } });
+		encryptionEnabledInput.checked = this.plugin.settings.encryptionEnabled;
+		encryptionEnabledCheckbox.createSpan({ text: 'Enable folder encryption' });
+
+		// Auto-save encryption enabled setting
+		encryptionEnabledInput.addEventListener('change', async () => {
+			this.plugin.settings.encryptionEnabled = encryptionEnabledInput.checked;
+			await this.plugin.saveSettings();
+			
+			// Show/hide password field based on checkbox
+			if (this.plugin.settings.encryptionEnabled) {
+				encryptionPasswordGroup.style.display = 'block';
+			} else {
+				encryptionPasswordGroup.style.display = 'none';
+			}
+		});
+
+		const encryptionPasswordGroup = encryptionSection.createDiv('syncthing-form-group');
+		encryptionPasswordGroup.createEl('label', { cls: 'syncthing-label', text: 'Encryption Password' });
+		const encryptionPasswordInput = encryptionPasswordGroup.createEl('input', {
+			cls: 'syncthing-input',
+			attr: { type: 'password', value: this.plugin.settings.encryptionPassword, placeholder: 'Enter encryption password' }
+		});
+		encryptionPasswordGroup.createDiv({
+			cls: 'syncthing-help-text',
+			text: 'This password must be identical on all devices sharing encrypted folders. Leave empty to disable encryption.'
+		});
+
+		// Auto-save encryption password
+		encryptionPasswordInput.addEventListener('input', async () => {
+			this.plugin.settings.encryptionPassword = encryptionPasswordInput.value;
+			await this.plugin.saveSettings();
+		});
+
+		// Initially hide/show password field based on encryption enabled state
+		if (!this.plugin.settings.encryptionEnabled) {
+			encryptionPasswordGroup.style.display = 'none';
+		}
+
+		// iOS/Mobile Compatibility Section
+		if (this.plugin.detectMobilePlatform() || this.plugin.settings.mobileMode) {
+			const iosSection = container.createDiv('syncthing-section');
+			iosSection.createEl('h3', { cls: 'syncthing-section-title', text: '📱 iOS/Mobile Compatibility' });
+			iosSection.createDiv({
+				cls: 'syncthing-section-description',
+				text: 'Settings to improve file synchronization on iOS and mobile platforms.'
+			});
+
+			const hiddenFilesGroup = iosSection.createDiv('syncthing-form-group');
+			const hiddenFilesCheckbox = hiddenFilesGroup.createEl('label', { cls: 'syncthing-checkbox' });
+			const hiddenFilesInput = hiddenFilesCheckbox.createEl('input', { attr: { type: 'checkbox' } });
+			hiddenFilesInput.checked = this.plugin.settings.allowHiddenFiles;
+			hiddenFilesCheckbox.createSpan({ text: 'Sync hidden files and folders' });
+			hiddenFilesGroup.createDiv({
+				cls: 'syncthing-help-text',
+				text: 'Enable to sync .obsidian and other hidden files. Requires vault in Files app accessible location.'
+			});
+
+			// Auto-save hidden files setting
+			hiddenFilesInput.addEventListener('change', async () => {
+				this.plugin.settings.allowHiddenFiles = hiddenFilesInput.checked;
+				await this.plugin.saveSettings();
+			});
+
+			// Add iOS guidance
+			const iosGuidanceDiv = iosSection.createDiv('syncthing-form-group');
+			iosGuidanceDiv.createEl('h4', { text: 'iOS Setup Guide:' });
+			const guidanceList = iosGuidanceDiv.createEl('ul');
+			guidanceList.createEl('li', { text: 'Ensure your vault is in a Files app accessible location (iCloud Drive, On My iPhone/iPad)' });
+			guidanceList.createEl('li', { text: 'Configure the remote Syncthing URL to point to your server/desktop instance' });
+			guidanceList.createEl('li', { text: 'Verify all devices use the same encryption settings to avoid sync conflicts' });
+			guidanceList.createEl('li', { text: 'Use the same folder configuration across all devices' });
+		}
+
+		// Encryption Fix Tools Section
+		const fixSection = container.createDiv('syncthing-section');
+		fixSection.createEl('h3', { cls: 'syncthing-section-title', text: '🔧 Encryption Fix Tools' });
+		fixSection.createDiv({
+			cls: 'syncthing-section-description',
+			text: 'Tools to diagnose and fix encryption-related sync errors.'
+		});
+
+		const fixEncryptionBtn = fixSection.createEl('button', {
+			cls: 'syncthing-btn secondary',
+			text: '🔍 Check & Fix Encryption Mismatch'
+		});
+		fixEncryptionBtn.addEventListener('click', async () => {
+			new Notice('Checking for encryption mismatches...', 3000);
+			const success = await this.plugin.checkAndFixEncryptionMismatch();
+			if (success) {
+				new Notice('✅ Encryption settings checked and synchronized across devices', 5000);
+			} else {
+				new Notice('❌ Failed to check encryption settings. Check your API key and connection.', 5000);
+			}
+		});
+
+		const removeHardcodedBtn = fixSection.createEl('button', {
+			cls: 'syncthing-btn secondary',
+			text: '🧹 Remove Hardcoded Encryption'
+		});
+		removeHardcodedBtn.addEventListener('click', async () => {
+			new Notice('Removing hardcoded encryption settings...', 3000);
+			const success = await this.plugin.removeHardcodedEncryption();
+			if (success) {
+				new Notice('✅ Hardcoded encryption removed. All encryption is now configurable via plugin settings.', 5000);
+			} else {
+				new Notice('❌ Failed to remove hardcoded encryption. Check your API key and connection.', 5000);
+			}
+		});
+
 		// Save button (now redundant since all fields auto-save, but keeping for user feedback)
 		const saveBtn = container.createEl('button', {
 			cls: 'syncthing-btn primary',
@@ -2858,6 +3211,8 @@ class SettingTab extends PluginSettingTab {
 			this.plugin.settings.remoteUrl = remoteUrlInput.value;
 			this.plugin.settings.startOnObsidianOpen = autoStartInput.checked;
 			this.plugin.settings.stopOnObsidianClose = autoStopInput.checked;
+			this.plugin.settings.encryptionEnabled = encryptionEnabledInput.checked;
+			this.plugin.settings.encryptionPassword = encryptionPasswordInput.value;
 
 			await this.plugin.saveSettings();
 			new Notice('Configuration refreshed and saved successfully');
