@@ -142,11 +142,44 @@ export class IOSFileManager {
     private setupFileWatchers(): void {
         console.log('Setting up vault file watchers for live updates...');
         
-        // Listen for file events with proper handlers
-        this.vault.on('create', this.handleFileCreate);
-        this.vault.on('delete', this.handleFileDelete);
-        this.vault.on('modify', this.handleFileModify);
-        this.vault.on('rename', this.handleFileRename);
+        // Listen for file creation
+        this.vault.on('create', async (file) => {
+            const item = await this.createFileItemFromVault(file);
+            if (item) {
+                this.vaultFiles.set(item.path, item);
+                this.updateSettingsFromVault();
+                console.log(`File created: ${file.path}`);
+            }
+        });
+        
+        // Listen for file deletion
+        this.vault.on('delete', (file) => {
+            this.vaultFiles.delete(file.path);
+            delete this.settings.syncedFiles[file.path];
+            console.log(`File deleted: ${file.path}`);
+        });
+        
+        // Listen for file modification
+        this.vault.on('modify', async (file) => {
+            const item = await this.createFileItemFromVault(file);
+            if (item) {
+                this.vaultFiles.set(item.path, item);
+                console.log(`File modified: ${file.path}`);
+            }
+        });
+        
+        // Listen for file rename
+        this.vault.on('rename', async (file, oldPath) => {
+            this.vaultFiles.delete(oldPath);
+            delete this.settings.syncedFiles[oldPath];
+            
+            const item = await this.createFileItemFromVault(file);
+            if (item) {
+                this.vaultFiles.set(item.path, item);
+                this.settings.syncedFiles[item.path] = this.settings.syncedFiles[oldPath] || true;
+            }
+            console.log(`File renamed: ${oldPath} -> ${file.path}`);
+        });
     }
 
     /**
@@ -355,48 +388,8 @@ export class IOSFileManager {
      */
     destroy(): void {
         console.log('Cleaning up iOS File Manager...');
-        // Remove all event listeners
-        this.vault.off('create', this.handleFileCreate);
-        this.vault.off('delete', this.handleFileDelete);
-        this.vault.off('modify', this.handleFileModify);
-        this.vault.off('rename', this.handleFileRename);
+        this.vault.offref();
         this.vaultFiles.clear();
         this.isInitialized = false;
     }
-
-    // Event handlers for proper cleanup
-    private handleFileCreate = async (file: TAbstractFile) => {
-        const item = await this.createFileItemFromVault(file);
-        if (item) {
-            this.vaultFiles.set(item.path, item);
-            this.updateSettingsFromVault();
-            console.log(`File created: ${file.path}`);
-        }
-    };
-
-    private handleFileDelete = (file: TAbstractFile) => {
-        this.vaultFiles.delete(file.path);
-        delete this.settings.syncedFiles[file.path];
-        console.log(`File deleted: ${file.path}`);
-    };
-
-    private handleFileModify = async (file: TAbstractFile) => {
-        const item = await this.createFileItemFromVault(file);
-        if (item) {
-            this.vaultFiles.set(item.path, item);
-            console.log(`File modified: ${file.path}`);
-        }
-    };
-
-    private handleFileRename = async (file: TAbstractFile, oldPath: string) => {
-        this.vaultFiles.delete(oldPath);
-        delete this.settings.syncedFiles[oldPath];
-        
-        const item = await this.createFileItemFromVault(file);
-        if (item) {
-            this.vaultFiles.set(item.path, item);
-            this.settings.syncedFiles[item.path] = this.settings.syncedFiles[oldPath] || true;
-        }
-        console.log(`File renamed: ${oldPath} -> ${file.path}`);
-    };
 }

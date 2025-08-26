@@ -914,6 +914,12 @@ export default class Obsyncth extends Plugin {
 
 	onunload() {
 		window.removeEventListener('beforeunload', this.handleBeforeUnload.bind(this));
+		
+		// Cleanup iOS file manager
+		if (this.iosFileManager) {
+			this.iosFileManager.destroy();
+		}
+		
 		this.monitor.stopMonitoring();
 	}
 
