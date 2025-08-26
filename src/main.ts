@@ -174,6 +174,9 @@ interface Settings {
 	encryptionEnabled: boolean;
 	encryptionPassword: string;
 	allowHiddenFiles: boolean;
+	selectedVaultPath: string;
+	syncedFiles: { [path: string]: boolean };
+	ignorePatterns: string[];
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -189,6 +192,9 @@ const DEFAULT_SETTINGS: Settings = {
 	encryptionEnabled: false,
 	encryptionPassword: '',
 	allowHiddenFiles: true,
+	selectedVaultPath: '',
+	syncedFiles: {},
+	ignorePatterns: [],
 }
 
 interface SyncthingEvent {
@@ -204,6 +210,23 @@ interface Connection {
 
 interface ConnectionsResponse {
 	connections: { [key: string]: Connection };
+}
+
+interface FileItem {
+	name: string;
+	path: string;
+	type: 'file' | 'folder';
+	size?: number;
+	isHidden: boolean;
+	isSelected: boolean;
+	children?: FileItem[];
+}
+
+interface DirectoryListing {
+	path: string;
+	items: FileItem[];
+	canGoUp: boolean;
+	parentPath?: string;
 }
 
 /**
@@ -1685,6 +1708,354 @@ export default class Obsyncth extends Plugin {
 	}
 
 	/**
+	 * iOS Native Folder Picker - Working Copy style implementation
+	 */
+	async showIOSFolderPicker(): Promise<string | null> {
+		try {
+			// Use HTML5 file picker with directory support for iOS
+			const input = document.createElement('input');
+			input.type = 'file';
+			input.webkitdirectory = true; // iOS Files app support
+			input.multiple = true;
+			input.style.display = 'none';
+			
+			document.body.appendChild(input);
+			
+			return new Promise((resolve) => {
+				input.onchange = (event: any) => {
+					const files = event.target.files;
+					if (files && files.length > 0) {
+						// Get the common path from the first file
+						const firstFile = files[0];
+						const fullPath = firstFile.webkitRelativePath || firstFile.name;
+						const folderPath = fullPath.substring(0, fullPath.lastIndexOf('/'));
+						
+						// Store selected files for processing
+						this.processSelectedFiles(files);
+						
+						document.body.removeChild(input);
+						resolve(folderPath);
+					} else {
+						document.body.removeChild(input);
+						resolve(null);
+					}
+				};
+				
+				input.oncancel = () => {
+					document.body.removeChild(input);
+					resolve(null);
+				};
+				
+				// Trigger the picker
+				input.click();
+			});
+		} catch (error) {
+			console.error('iOS folder picker error:', error);
+			new Notice('Failed to open folder picker. Please ensure you\'re using a compatible iOS version.', 5000);
+			return null;
+		}
+	}
+
+	/**
+	 * Process selected files from iOS picker - Working Copy style
+	 */
+	async processSelectedFiles(files: FileList): Promise<void> {
+		try {
+			const fileStructure: { [path: string]: boolean } = {};
+			
+			// Process all files including hidden ones
+			for (let i = 0; i < files.length; i++) {
+				const file = files[i];
+				const relativePath = file.webkitRelativePath || file.name;
+				
+				// Include all files by default, including hidden ones
+				fileStructure[relativePath] = true;
+				
+				// Also track parent directories
+				const pathParts = relativePath.split('/');
+				for (let j = 1; j < pathParts.length; j++) {
+					const parentPath = pathParts.slice(0, j).join('/');
+					if (!fileStructure.hasOwnProperty(parentPath)) {
+						fileStructure[parentPath] = true;
+					}
+				}
+			}
+			
+			// Update settings with discovered files
+			this.settings.syncedFiles = fileStructure;
+			await this.saveSettings();
+			
+			console.log(`Processed ${Object.keys(fileStructure).length} files and folders from iOS picker`);
+			new Notice(`Discovered ${Object.keys(fileStructure).length} items. Use File Manager to customize sync selection.`, 5000);
+			
+		} catch (error) {
+			console.error('Error processing selected files:', error);
+		}
+	}
+
+	/**
+	 * Get file/folder listing for built-in file manager
+	 */
+	async getDirectoryListing(currentPath: string = ''): Promise<DirectoryListing> {
+		try {
+			// On iOS/mobile, work with the processed file structure
+			if (this.isMobile || this.settings.mobileMode) {
+				return this.getIOSDirectoryListing(currentPath);
+			}
+			
+			// Desktop implementation using Node.js fs
+			if (typeof require !== 'undefined') {
+				return this.getDesktopDirectoryListing(currentPath);
+			}
+			
+			// Fallback
+			return {
+				path: currentPath,
+				items: [],
+				canGoUp: false
+			};
+		} catch (error) {
+			console.error('Error getting directory listing:', error);
+			return {
+				path: currentPath,
+				items: [],
+				canGoUp: false
+			};
+		}
+	}
+
+	/**
+	 * iOS directory listing from processed files
+	 */
+	private getIOSDirectoryListing(currentPath: string): DirectoryListing {
+		const items: FileItem[] = [];
+		const processedPaths = new Set<string>();
+		
+		// Get all files/folders at current level
+		Object.keys(this.settings.syncedFiles).forEach(filePath => {
+			if (currentPath === '') {
+				// Root level - get top-level items
+				const topLevel = filePath.split('/')[0];
+				if (!processedPaths.has(topLevel)) {
+					processedPaths.add(topLevel);
+					
+					const isFolder = Object.keys(this.settings.syncedFiles).some(p => 
+						p.startsWith(topLevel + '/') && p !== topLevel
+					);
+					
+					items.push({
+						name: topLevel,
+						path: topLevel,
+						type: isFolder ? 'folder' : 'file',
+						isHidden: topLevel.startsWith('.'),
+						isSelected: this.settings.syncedFiles[topLevel] || false,
+						children: isFolder ? [] : undefined
+					});
+				}
+			} else {
+				// Subdirectory level
+				const prefix = currentPath + '/';
+				if (filePath.startsWith(prefix)) {
+					const relativePath = filePath.substring(prefix.length);
+					const nextLevel = relativePath.split('/')[0];
+					
+					if (!processedPaths.has(nextLevel)) {
+						processedPaths.add(nextLevel);
+						
+						const fullPath = currentPath + '/' + nextLevel;
+						const isFolder = Object.keys(this.settings.syncedFiles).some(p => 
+							p.startsWith(fullPath + '/') && p !== fullPath
+						);
+						
+						items.push({
+							name: nextLevel,
+							path: fullPath,
+							type: isFolder ? 'folder' : 'file',
+							isHidden: nextLevel.startsWith('.'),
+							isSelected: this.settings.syncedFiles[fullPath] || false,
+							children: isFolder ? [] : undefined
+						});
+					}
+				}
+			}
+		});
+		
+		// Sort items: folders first, then files, hidden items at end if not showing hidden
+		items.sort((a, b) => {
+			if (a.type !== b.type) {
+				return a.type === 'folder' ? -1 : 1;
+			}
+			if (!this.settings.allowHiddenFiles) {
+				if (a.isHidden !== b.isHidden) {
+					return a.isHidden ? 1 : -1;
+				}
+			}
+			return a.name.localeCompare(b.name);
+		});
+		
+		return {
+			path: currentPath,
+			items: items,
+			canGoUp: currentPath !== '',
+			parentPath: currentPath ? currentPath.substring(0, currentPath.lastIndexOf('/')) : undefined
+		};
+	}
+
+	/**
+	 * Desktop directory listing using Node.js fs
+	 */
+	private getDesktopDirectoryListing(currentPath: string): DirectoryListing {
+		if (typeof require === 'undefined') {
+			return { path: currentPath, items: [], canGoUp: false };
+		}
+		
+		try {
+			const fs = require('fs');
+			const path = require('path');
+			const basePath = this.settings.selectedVaultPath || this.vaultPath;
+			const fullPath = currentPath ? path.join(basePath, currentPath) : basePath;
+			
+			const entries = fs.readdirSync(fullPath, { withFileTypes: true });
+			const items: FileItem[] = [];
+			
+			for (const entry of entries) {
+				const itemPath = currentPath ? `${currentPath}/${entry.name}` : entry.name;
+				const isHidden = entry.name.startsWith('.');
+				
+				// Skip hidden files if not allowed and not explicitly in synced files
+				if (!this.settings.allowHiddenFiles && isHidden && !this.settings.syncedFiles[itemPath]) {
+					continue;
+				}
+				
+				const fullItemPath = path.join(fullPath, entry.name);
+				let size: number | undefined = undefined;
+				
+				if (entry.isFile()) {
+					try {
+						const stats = fs.statSync(fullItemPath);
+						size = stats.size;
+					} catch (e) {
+						// File might be inaccessible, skip size
+					}
+				}
+				
+				items.push({
+					name: entry.name,
+					path: itemPath,
+					type: entry.isDirectory() ? 'folder' : 'file',
+					size: size,
+					isHidden: isHidden,
+					isSelected: this.settings.syncedFiles[itemPath] || false,
+					children: entry.isDirectory() ? [] : undefined
+				});
+			}
+			
+			// Sort items: folders first, then files
+			items.sort((a, b) => {
+				if (a.type !== b.type) {
+					return a.type === 'folder' ? -1 : 1;
+				}
+				return a.name.localeCompare(b.name);
+			});
+			
+			return {
+				path: currentPath,
+				items: items,
+				canGoUp: currentPath !== '',
+				parentPath: currentPath ? path.dirname(currentPath).replace(/\\/g, '/') : undefined
+			};
+		} catch (error) {
+			console.error('Error reading desktop directory:', error);
+			return { path: currentPath, items: [], canGoUp: false };
+		}
+	}
+
+	/**
+	 * Toggle file/folder selection in file manager
+	 */
+	async toggleFileSelection(filePath: string, selected: boolean): Promise<void> {
+		this.settings.syncedFiles[filePath] = selected;
+		
+		// If selecting a folder, optionally select all children
+		if (selected) {
+			Object.keys(this.settings.syncedFiles).forEach(path => {
+				if (path.startsWith(filePath + '/')) {
+					this.settings.syncedFiles[path] = true;
+				}
+			});
+		} else {
+			// If deselecting a folder, deselect all children
+			Object.keys(this.settings.syncedFiles).forEach(path => {
+				if (path.startsWith(filePath + '/')) {
+					this.settings.syncedFiles[path] = false;
+				}
+			});
+		}
+		
+		await this.saveSettings();
+		this.updateIgnorePatterns();
+	}
+
+	/**
+	 * Generate Syncthing ignore patterns from selected files
+	 */
+	updateIgnorePatterns(): void {
+		const ignorePatterns: string[] = [];
+		
+		// Process all known files/folders
+		Object.keys(this.settings.syncedFiles).forEach(filePath => {
+			const isSelected = this.settings.syncedFiles[filePath];
+			
+			if (!isSelected) {
+				// Add to ignore patterns
+				ignorePatterns.push(filePath);
+				
+				// Also ignore everything under this path if it's a folder
+				if (!filePath.includes('.') || filePath.endsWith('/')) {
+					ignorePatterns.push(filePath + '/**');
+				}
+			}
+		});
+		
+		// Always ignore plugin files
+		ignorePatterns.push('Syncthing binary-config/**');
+		ignorePatterns.push('obsyncth/**');
+		
+		this.settings.ignorePatterns = ignorePatterns;
+		console.log(`Generated ${ignorePatterns.length} ignore patterns for Syncthing`);
+	}
+
+	/**
+	 * Apply ignore patterns to Syncthing configuration
+	 */
+	async applySyncthingIgnorePatterns(): Promise<boolean> {
+		try {
+			const config = await this.getSyncthingConfig();
+			
+			// Find the vault folder
+			const vaultFolder = config.folders.find((f: any) => f.id === this.settings.vaultFolderID);
+			if (!vaultFolder) {
+				new Notice('Vault folder not found in Syncthing configuration', 5000);
+				return false;
+			}
+			
+			// Update ignore patterns
+			vaultFolder.ignorePatterns = this.settings.ignorePatterns;
+			
+			// Update the configuration
+			const success = await this.updateSyncthingConfig(config);
+			if (success) {
+				new Notice(`Applied ${this.settings.ignorePatterns.length} ignore patterns to Syncthing`, 3000);
+			}
+			
+			return success;
+		} catch (error) {
+			console.error('Failed to apply ignore patterns:', error);
+			return false;
+		}
+	}
+
+	/**
 	 * Check and fix encryption mismatches across devices
 	 */
 	async checkAndFixEncryptionMismatch(): Promise<boolean> {
@@ -2670,6 +3041,10 @@ export default class Obsyncth extends Plugin {
 
 	async saveSettings() {
 		await this.saveData(this.settings);
+		
+		// Update ignore patterns when settings change
+		this.updateIgnorePatterns();
+		
 		// Restart monitoring with new settings
 		this.monitor.stopMonitoring();
 		setTimeout(() => {
@@ -2700,6 +3075,7 @@ class SettingTab extends PluginSettingTab {
 			const tabs = [
 				{ id: 'overview', label: 'Overview', icon: '📊' },
 				{ id: 'configuration', label: 'Configuration', icon: '⚙️' },
+				{ id: 'filemanager', label: 'File Manager', icon: '📁' },
 				{ id: 'advanced', label: 'Advanced', icon: '🔧' },
 				{ id: 'about', label: 'About', icon: 'ℹ️' }
 			];
@@ -2735,6 +3111,9 @@ class SettingTab extends PluginSettingTab {
 				break;
 			case 'configuration':
 				this.renderConfigurationTab(contentEl);
+				break;
+			case 'filemanager':
+				this.renderFileManagerTab(contentEl);
 				break;
 			case 'advanced':
 				this.renderAdvancedTab(contentEl);
@@ -3646,6 +4025,250 @@ class SettingTab extends PluginSettingTab {
 		features.forEach(feature => {
 			featuresList.createEl('li', { text: feature });
 		});
+	}
+
+	private renderFileManagerTab(container: HTMLElement): void {
+		// File Manager Header
+		const headerSection = container.createDiv('syncthing-section');
+		headerSection.createEl('h3', { cls: 'syncthing-section-title', text: '📁 File Manager' });
+		headerSection.createDiv({
+			cls: 'syncthing-section-description',
+			text: 'Select files and folders to sync. Unselected items will be ignored by Syncthing.'
+		});
+
+		// iOS Folder Picker (only on mobile)
+		if (this.plugin.detectMobilePlatform() || this.plugin.settings.mobileMode) {
+			const pickerSection = container.createDiv('syncthing-section');
+			pickerSection.createEl('h4', { cls: 'syncthing-section-subtitle', text: '📱 iOS Folder Selection' });
+			
+			const pickerBtn = pickerSection.createEl('button', {
+				cls: 'syncthing-btn primary',
+				text: '📂 Select Vault Folder'
+			});
+			
+			pickerBtn.addEventListener('click', async () => {
+				new Notice('Opening iOS folder picker...', 3000);
+				const selectedPath = await this.plugin.showIOSFolderPicker();
+				if (selectedPath) {
+					this.plugin.settings.selectedVaultPath = selectedPath;
+					await this.plugin.saveSettings();
+					new Notice(`Selected folder: ${selectedPath}`, 5000);
+					// Refresh the file manager view
+					this.renderFileManagerTab(container);
+				} else {
+					new Notice('No folder selected', 3000);
+				}
+			});
+			
+			if (this.plugin.settings.selectedVaultPath) {
+				pickerSection.createDiv({
+					cls: 'syncthing-help-text',
+					text: `Selected: ${this.plugin.settings.selectedVaultPath}`
+				});
+			}
+		}
+
+		// File Tree Section
+		const treeSection = container.createDiv('syncthing-section');
+		treeSection.createEl('h4', { cls: 'syncthing-section-subtitle', text: '🌳 File Tree' });
+		
+		// Navigation and controls
+		const controlsDiv = treeSection.createDiv('syncthing-file-controls');
+		
+		const navDiv = controlsDiv.createDiv('syncthing-file-nav');
+		const currentPathSpan = navDiv.createSpan({ cls: 'syncthing-current-path', text: 'Loading...' });
+		
+		const actionsDiv = controlsDiv.createDiv('syncthing-file-actions');
+		
+		const selectAllBtn = actionsDiv.createEl('button', {
+			cls: 'syncthing-btn secondary small',
+			text: '✅ Select All'
+		});
+		
+		const deselectAllBtn = actionsDiv.createEl('button', {
+			cls: 'syncthing-btn secondary small',
+			text: '❌ Deselect All'
+		});
+		
+		const applyPatternsBtn = actionsDiv.createEl('button', {
+			cls: 'syncthing-btn primary small',
+			text: '💾 Apply to Syncthing'
+		});
+
+		// File listing container
+		const fileListContainer = treeSection.createDiv('syncthing-file-list');
+		
+		// State for current directory
+		let currentPath = '';
+		
+		// Function to render directory listing
+		const renderDirectoryListing = async (path: string = '') => {
+			try {
+				currentPath = path;
+				currentPathSpan.textContent = path || '/';
+				
+				const listing = await this.plugin.getDirectoryListing(path);
+				fileListContainer.empty();
+				
+				// Back button if not at root
+				if (listing.canGoUp) {
+					const backItem = fileListContainer.createDiv('syncthing-file-item folder');
+					backItem.createSpan({ cls: 'syncthing-file-icon', text: '📁' });
+					backItem.createSpan({ cls: 'syncthing-file-name', text: '..' });
+					backItem.addEventListener('click', () => {
+						renderDirectoryListing(listing.parentPath || '');
+					});
+				}
+				
+				// Render items
+				listing.items.forEach(item => {
+					const itemEl = fileListContainer.createDiv(`syncthing-file-item ${item.type}${item.isHidden ? ' hidden' : ''}`);
+					
+					// Checkbox for selection
+					const checkbox = itemEl.createEl('input', { attr: { type: 'checkbox' } });
+					checkbox.checked = item.isSelected;
+					checkbox.addEventListener('change', async () => {
+						await this.plugin.toggleFileSelection(item.path, checkbox.checked);
+						// Update visual state
+						itemEl.toggleClass('selected', checkbox.checked);
+					});
+					
+					// Icon
+					const icon = item.type === 'folder' ? '📁' : '📄';
+					itemEl.createSpan({ cls: 'syncthing-file-icon', text: icon });
+					
+					// Name
+					const nameEl = itemEl.createSpan({ cls: 'syncthing-file-name', text: item.name });
+					
+					// Size (for files)
+					if (item.type === 'file' && item.size !== undefined) {
+						const sizeText = this.formatFileSize(item.size);
+						itemEl.createSpan({ cls: 'syncthing-file-size', text: sizeText });
+					}
+					
+					// Hidden indicator
+					if (item.isHidden) {
+						itemEl.createSpan({ cls: 'syncthing-file-hidden', text: 'hidden' });
+					}
+					
+					// Make folders clickable
+					if (item.type === 'folder') {
+						nameEl.style.cursor = 'pointer';
+						nameEl.addEventListener('click', () => {
+							renderDirectoryListing(item.path);
+						});
+					}
+					
+					// Visual state
+					if (item.isSelected) {
+						itemEl.addClass('selected');
+					}
+				});
+				
+				// Show empty state if no items
+				if (listing.items.length === 0 && !listing.canGoUp) {
+					fileListContainer.createDiv('syncthing-empty-state', (emptyEl) => {
+						emptyEl.createSpan({ text: 'No files found. ' });
+						if (this.plugin.detectMobilePlatform()) {
+							emptyEl.createSpan({ text: 'Use the folder picker above to select your vault.' });
+						}
+					});
+				}
+				
+			} catch (error) {
+				console.error('Error rendering directory listing:', error);
+				fileListContainer.empty();
+				fileListContainer.createDiv('syncthing-error-state', (errorEl) => {
+					errorEl.createSpan({ text: 'Error loading files. ' });
+					if (this.plugin.detectMobilePlatform()) {
+						errorEl.createSpan({ text: 'Please select a folder using the picker above.' });
+					}
+				});
+			}
+		};
+		
+		// Event handlers
+		selectAllBtn.addEventListener('click', async () => {
+			Object.keys(this.plugin.settings.syncedFiles).forEach(async (path) => {
+				this.plugin.settings.syncedFiles[path] = true;
+			});
+			await this.plugin.saveSettings();
+			this.plugin.updateIgnorePatterns();
+			renderDirectoryListing(currentPath);
+			new Notice('All files selected for sync', 3000);
+		});
+		
+		deselectAllBtn.addEventListener('click', async () => {
+			Object.keys(this.plugin.settings.syncedFiles).forEach(async (path) => {
+				this.plugin.settings.syncedFiles[path] = false;
+			});
+			await this.plugin.saveSettings();
+			this.plugin.updateIgnorePatterns();
+			renderDirectoryListing(currentPath);
+			new Notice('All files deselected from sync', 3000);
+		});
+		
+		applyPatternsBtn.addEventListener('click', async () => {
+			new Notice('Applying ignore patterns to Syncthing...', 3000);
+			const success = await this.plugin.applySyncthingIgnorePatterns();
+			if (success) {
+				new Notice('✅ Ignore patterns applied successfully!', 5000);
+			} else {
+				new Notice('❌ Failed to apply ignore patterns. Check your API key and connection.', 5000);
+			}
+		});
+		
+		// Initial load
+		renderDirectoryListing('');
+
+		// Ignore Patterns Preview Section
+		const patternsSection = container.createDiv('syncthing-section');
+		patternsSection.createEl('h4', { cls: 'syncthing-section-subtitle', text: '🚫 Generated Ignore Patterns' });
+		patternsSection.createDiv({
+			cls: 'syncthing-section-description',
+			text: 'These patterns will be applied to Syncthing to ignore unselected files.'
+		});
+		
+		const patternsContainer = patternsSection.createDiv('syncthing-patterns-container');
+		const patternsTextarea = patternsContainer.createEl('textarea', {
+			cls: 'syncthing-patterns-textarea',
+			attr: { 
+				readonly: 'true', 
+				rows: '10',
+				placeholder: 'Ignore patterns will appear here...'
+			}
+		});
+		
+		// Update patterns display
+		const updatePatternsDisplay = () => {
+			this.plugin.updateIgnorePatterns();
+			patternsTextarea.value = this.plugin.settings.ignorePatterns.join('\n');
+		};
+		
+		// Initial patterns display
+		updatePatternsDisplay();
+		
+		// Refresh patterns every few seconds if patterns have changed
+		const patternsInterval = setInterval(() => {
+			if (this.activeTab === 'filemanager') {
+				updatePatternsDisplay();
+			} else {
+				clearInterval(patternsInterval);
+			}
+		}, 3000);
+	}
+
+	private formatFileSize(bytes: number): string {
+		const units = ['B', 'KB', 'MB', 'GB'];
+		let size = bytes;
+		let unitIndex = 0;
+		
+		while (size >= 1024 && unitIndex < units.length - 1) {
+			size /= 1024;
+			unitIndex++;
+		}
+		
+		return `${Math.round(size * 10) / 10} ${units[unitIndex]}`;
 	}
 
 	private async updateStatus(): Promise<void> {
