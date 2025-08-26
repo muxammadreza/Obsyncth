@@ -21,7 +21,7 @@ function detectMobilePlatform(): boolean {
 	}
 	
 	// Check user agent for mobile platforms
-	const userAgent = navigator.userAgent || navigator.vendor || (window as any).opera;
+	const userAgent = navigator.userAgent || navigator.vendor || (window as any).opera || '';
 	
 	// iOS detection
 	if (/iPad|iPhone|iPod/.test(userAgent)) {
@@ -39,6 +39,36 @@ function detectMobilePlatform(): boolean {
 	}
 	
 	return false;
+}
+
+// Get detailed platform information for mobile devices
+function getMobilePlatformInfo(): { platform: string; arch: string } {
+	const userAgent = (navigator.userAgent || navigator.vendor || (window as any).opera || '').toLowerCase();
+	
+	// iOS detection with better specificity
+	if (/ipad/.test(userAgent)) {
+		return { platform: 'ios', arch: 'arm64' };
+	}
+	if (/iphone|ipod/.test(userAgent)) {
+		return { platform: 'ios', arch: 'arm64' };
+	}
+	
+	// Android detection with architecture hints
+	if (/android/.test(userAgent)) {
+		// Try to detect architecture from user agent
+		if (/arm64|aarch64/.test(userAgent)) {
+			return { platform: 'android', arch: 'arm64' };
+		} else if (/arm/.test(userAgent)) {
+			return { platform: 'android', arch: 'arm' };
+		} else if (/x86_64|x64/.test(userAgent)) {
+			return { platform: 'android', arch: 'x64' };
+		} else {
+			return { platform: 'android', arch: 'arm64' }; // Default for modern Android
+		}
+	}
+	
+	// Fallback for other mobile platforms
+	return { platform: 'mobile', arch: 'unknown' };
 }
 
 // Conditional imports for desktop-only functionality
@@ -110,18 +140,10 @@ try {
 		console.log('Mobile platform detected - Node.js functionality disabled');
 		EventEmitter = SimpleEventEmitter;
 		
-		// Platform info for mobile (iOS/Android)
-		const userAgent = navigator.userAgent.toLowerCase();
-		if (/ipad|iphone|ipod/.test(userAgent)) {
-			platformInfo.platform = 'ios';
-			platformInfo.arch = 'arm64'; // Most modern iOS devices
-		} else if (/android/.test(userAgent)) {
-			platformInfo.platform = 'android';
-			platformInfo.arch = 'arm64'; // Most modern Android devices
-		} else {
-			platformInfo.platform = 'mobile';
-			platformInfo.arch = 'unknown';
-		}
+		// Platform info for mobile (iOS/Android) - use enhanced detection
+		const mobileInfo = getMobilePlatformInfo();
+		platformInfo.platform = mobileInfo.platform;
+		platformInfo.arch = mobileInfo.arch;
 		platformInfo.isDesktop = false;
 		
 		http = {
@@ -153,11 +175,14 @@ try {
 		};
 	}
 } catch (error) {
-	// Fallback - these modules are not available
+	// Fallback - these modules are not available, probably mobile
 	console.log('Desktop-only modules not available:', error);
 	EventEmitter = SimpleEventEmitter;
-	platformInfo.platform = 'unknown';
-	platformInfo.arch = 'unknown';
+	
+	// Use enhanced mobile detection for fallback too
+	const mobileInfo = getMobilePlatformInfo();
+	platformInfo.platform = mobileInfo.platform;
+	platformInfo.arch = mobileInfo.arch;
 	platformInfo.isDesktop = false;
 }
 
@@ -186,7 +211,7 @@ const DEFAULT_SETTINGS: Settings = {
 	stopOnObsidianClose: false,
 	useDocker: false,
 	remoteUrl: 'http://127.0.0.1:8384',
-	mobileMode: false,
+	mobileMode: false, // Will be auto-detected and set to true on mobile platforms
 	remoteUsername: '',
 	remotePassword: '',
 	encryptionEnabled: false,
@@ -3346,32 +3371,30 @@ class SettingTab extends PluginSettingTab {
 		modeSection.createEl('h3', { cls: 'syncthing-section-title', text: '📱 Connection Mode' });
 		modeSection.createDiv({
 			cls: 'syncthing-section-description',
-			text: 'Choose how to connect to Syncthing: run locally, connect to remote instance, or use Docker.'
+			text: 'Choose how to connect to Syncthing: run locally or use Docker.'
 		});
 
-		const mobileGroup = modeSection.createDiv('syncthing-form-group');
-		const mobileCheckbox = mobileGroup.createEl('label', { cls: 'syncthing-checkbox' });
-		const mobileInput = mobileCheckbox.createEl('input', { attr: { type: 'checkbox' } });
-		mobileInput.checked = this.plugin.settings.mobileMode;
-		mobileCheckbox.createSpan({ text: 'Mobile Mode (connect to remote Syncthing)' });
+		// Only show Docker option on desktop platforms
+		if (!this.plugin.detectMobilePlatform()) {
+			const dockerGroup = modeSection.createDiv('syncthing-form-group');
+			const dockerCheckbox = dockerGroup.createEl('label', { cls: 'syncthing-checkbox' });
+			const dockerInput = dockerCheckbox.createEl('input', { attr: { type: 'checkbox' } });
+			dockerInput.checked = this.plugin.settings.useDocker;
+			dockerCheckbox.createSpan({ text: 'Use Docker (run Syncthing in container)' });
 
-		// Auto-save mobile mode setting
-		mobileInput.addEventListener('change', async () => {
-			this.plugin.settings.mobileMode = mobileInput.checked;
-			await this.plugin.saveSettings();
-		});
-
-		const dockerGroup = modeSection.createDiv('syncthing-form-group');
-		const dockerCheckbox = dockerGroup.createEl('label', { cls: 'syncthing-checkbox' });
-		const dockerInput = dockerCheckbox.createEl('input', { attr: { type: 'checkbox' } });
-		dockerInput.checked = this.plugin.settings.useDocker;
-		dockerCheckbox.createSpan({ text: 'Use Docker (run Syncthing in container)' });
-
-		// Auto-save docker mode setting
-		dockerInput.addEventListener('change', async () => {
-			this.plugin.settings.useDocker = dockerInput.checked;
-			await this.plugin.saveSettings();
-		});
+			// Auto-save docker mode setting
+			dockerInput.addEventListener('change', async () => {
+				this.plugin.settings.useDocker = dockerInput.checked;
+				await this.plugin.saveSettings();
+			});
+		} else {
+			// Show info for mobile users
+			const mobileInfo = modeSection.createDiv('syncthing-info-card');
+			mobileInfo.createEl('div', { 
+				cls: 'syncthing-info-text',
+				text: '📱 Mobile Mode Active: Connect to remote Syncthing instance' 
+			});
+		}
 
 		const remoteUrlGroup = modeSection.createDiv('syncthing-form-group');
 		remoteUrlGroup.createEl('label', { cls: 'syncthing-label', text: 'Remote Syncthing URL' });
@@ -3585,13 +3608,20 @@ class SettingTab extends PluginSettingTab {
 			// Force save all current values (though they should already be saved)
 			this.plugin.settings.syncthingApiKey = apiKeyInput.value;
 			this.plugin.settings.vaultFolderID = folderIdInput.value;
-			this.plugin.settings.mobileMode = mobileInput.checked;
-			this.plugin.settings.useDocker = dockerInput.checked;
 			this.plugin.settings.remoteUrl = remoteUrlInput.value;
 			this.plugin.settings.startOnObsidianOpen = autoStartInput.checked;
 			this.plugin.settings.stopOnObsidianClose = autoStopInput.checked;
 			this.plugin.settings.encryptionEnabled = encryptionEnabledInput.checked;
 			this.plugin.settings.encryptionPassword = encryptionPasswordInput.value;
+
+			// Only save Docker setting on desktop
+			if (!this.plugin.detectMobilePlatform()) {
+				// Find the docker input if it exists
+				const dockerInput = container.querySelector('input[type="checkbox"]');
+				if (dockerInput && dockerInput !== autoStartInput && dockerInput !== autoStopInput && dockerInput !== encryptionEnabledInput) {
+					this.plugin.settings.useDocker = (dockerInput as HTMLInputElement).checked;
+				}
+			}
 
 			await this.plugin.saveSettings();
 			new Notice('Configuration refreshed and saved successfully');
