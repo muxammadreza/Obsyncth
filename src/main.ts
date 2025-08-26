@@ -174,6 +174,9 @@ interface Settings {
 	encryptionEnabled: boolean;
 	encryptionPassword: string;
 	allowHiddenFiles: boolean;
+	customSyncPath: string;
+	selectedFolders: string[];
+	forceConsistentEncryption: boolean;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -189,6 +192,9 @@ const DEFAULT_SETTINGS: Settings = {
 	encryptionEnabled: false,
 	encryptionPassword: '',
 	allowHiddenFiles: true,
+	customSyncPath: '',
+	selectedFolders: [],
+	forceConsistentEncryption: true,
 }
 
 interface SyncthingEvent {
@@ -1795,6 +1801,488 @@ export default class Obsyncth extends Plugin {
 		}
 	}
 
+	/**
+	 * iOS-specific file and folder handling - Working Copy approach
+	 */
+	async showIOSFolderPicker(): Promise<string | null> {
+		if (!this.isMobile) {
+			new Notice('iOS folder picker is only available on iOS devices', 5000);
+			return null;
+		}
+
+		return new Promise((resolve) => {
+			// Create iOS-style folder picker modal
+			const modal = document.createElement('div');
+			modal.className = 'ios-folder-picker-modal';
+			modal.style.cssText = `
+				position: fixed;
+				top: 0;
+				left: 0;
+				width: 100%;
+				height: 100%;
+				background: rgba(0,0,0,0.5);
+				z-index: 1000;
+				display: flex;
+				align-items: center;
+				justify-content: center;
+			`;
+
+			const picker = document.createElement('div');
+			picker.className = 'ios-folder-picker';
+			picker.style.cssText = `
+				background: var(--background-primary);
+				border-radius: 12px;
+				padding: 20px;
+				max-width: 90%;
+				max-height: 80%;
+				overflow-y: auto;
+				box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+			`;
+
+			picker.innerHTML = `
+				<h2 style="margin-top: 0;">Select Sync Folder</h2>
+				<p style="color: var(--text-muted); margin-bottom: 20px;">
+					Choose the folder to sync with Syncthing. Hidden folders like .obsidian will be included.
+				</p>
+				<div class="folder-options">
+					<button class="folder-option" data-path="vault-root">
+						📁 Entire Vault (Recommended)
+						<br><small>Syncs everything including .obsidian folder</small>
+					</button>
+					<button class="folder-option" data-path="vault-only">
+						📝 Vault Content Only
+						<br><small>Excludes .obsidian and plugin data</small>
+					</button>
+					<button class="folder-option" data-path="obsidian-only">
+						⚙️ .obsidian Folder Only
+						<br><small>Syncs only configuration and plugins</small>
+					</button>
+					<button class="folder-option" data-path="custom">
+						🎯 Custom Selection
+						<br><small>Choose specific folders to sync</small>
+					</button>
+				</div>
+				<div class="picker-actions">
+					<button class="cancel-btn">Cancel</button>
+				</div>
+			`;
+
+			// Style the folder options
+			const style = document.createElement('style');
+			style.textContent = `
+				.folder-option {
+					display: block;
+					width: 100%;
+					padding: 15px;
+					margin: 10px 0;
+					background: var(--background-secondary);
+					border: 2px solid var(--background-modifier-border);
+					border-radius: 8px;
+					cursor: pointer;
+					text-align: left;
+					transition: all 0.2s ease;
+				}
+				.folder-option:hover {
+					background: var(--background-modifier-hover);
+					border-color: var(--interactive-accent);
+				}
+				.folder-option small {
+					color: var(--text-muted);
+					font-size: 0.85em;
+				}
+				.picker-actions {
+					margin-top: 20px;
+					text-align: center;
+				}
+				.cancel-btn {
+					padding: 8px 16px;
+					background: var(--background-secondary);
+					border: 1px solid var(--background-modifier-border);
+					border-radius: 6px;
+					cursor: pointer;
+				}
+			`;
+			document.head.appendChild(style);
+
+			modal.appendChild(picker);
+			document.body.appendChild(modal);
+
+			// Handle folder selection
+			picker.addEventListener('click', (e) => {
+				const target = e.target as HTMLElement;
+				
+				if (target.classList.contains('cancel-btn')) {
+					document.body.removeChild(modal);
+					document.head.removeChild(style);
+					resolve(null);
+					return;
+				}
+
+				const option = target.closest('.folder-option') as HTMLElement;
+				if (option) {
+					const path = option.getAttribute('data-path');
+					document.body.removeChild(modal);
+					document.head.removeChild(style);
+					
+					switch (path) {
+						case 'vault-root':
+							resolve(this.vaultPath);
+							break;
+						case 'vault-only':
+							resolve(`${this.vaultPath}/content`);
+							break;
+						case 'obsidian-only':
+							resolve(`${this.vaultPath}/.obsidian`);
+							break;
+						case 'custom':
+							this.showIOSCustomFolderSelector().then(resolve);
+							break;
+						default:
+							resolve(null);
+					}
+				}
+			});
+
+			// Close on background click
+			modal.addEventListener('click', (e) => {
+				if (e.target === modal) {
+					document.body.removeChild(modal);
+					document.head.removeChild(style);
+					resolve(null);
+				}
+			});
+		});
+	}
+
+	/**
+	 * iOS custom folder selector - allows selecting specific folders including hidden ones
+	 */
+	async showIOSCustomFolderSelector(): Promise<string | null> {
+		return new Promise((resolve) => {
+			// Get vault contents including hidden folders
+			const folders = this.getVaultFoldersIncludingHidden();
+			
+			const modal = document.createElement('div');
+			modal.className = 'ios-custom-folder-modal';
+			modal.style.cssText = `
+				position: fixed;
+				top: 0;
+				left: 0;
+				width: 100%;
+				height: 100%;
+				background: rgba(0,0,0,0.5);
+				z-index: 1001;
+				display: flex;
+				align-items: center;
+				justify-content: center;
+			`;
+
+			const selector = document.createElement('div');
+			selector.className = 'ios-custom-folder-selector';
+			selector.style.cssText = `
+				background: var(--background-primary);
+				border-radius: 12px;
+				padding: 20px;
+				max-width: 90%;
+				max-height: 80%;
+				overflow-y: auto;
+				box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+			`;
+
+			let folderListHTML = `
+				<h2 style="margin-top: 0;">Custom Folder Selection</h2>
+				<p style="color: var(--text-muted); margin-bottom: 20px;">
+					Select folders to sync. Hidden folders are shown with a dot prefix.
+				</p>
+				<div class="folder-list">
+			`;
+
+			folders.forEach(folder => {
+				const isHidden = folder.startsWith('.');
+				const icon = isHidden ? '👁️' : '📁';
+				folderListHTML += `
+					<label class="folder-checkbox">
+						<input type="checkbox" value="${folder}" ${this.settings.selectedFolders.includes(folder) ? 'checked' : ''}>
+						${icon} ${folder}
+						${isHidden ? ' <small>(hidden)</small>' : ''}
+					</label>
+				`;
+			});
+
+			folderListHTML += `
+				</div>
+				<div class="selector-actions">
+					<button class="apply-btn">Apply Selection</button>
+					<button class="cancel-btn">Cancel</button>
+				</div>
+			`;
+
+			selector.innerHTML = folderListHTML;
+
+			// Style the checkboxes
+			const style = document.createElement('style');
+			style.textContent = `
+				.folder-checkbox {
+					display: block;
+					padding: 10px;
+					margin: 5px 0;
+					background: var(--background-secondary);
+					border-radius: 6px;
+					cursor: pointer;
+				}
+				.folder-checkbox:hover {
+					background: var(--background-modifier-hover);
+				}
+				.folder-checkbox input {
+					margin-right: 10px;
+				}
+				.selector-actions {
+					margin-top: 20px;
+					text-align: center;
+				}
+				.apply-btn, .cancel-btn {
+					padding: 8px 16px;
+					margin: 0 5px;
+					border-radius: 6px;
+					cursor: pointer;
+				}
+				.apply-btn {
+					background: var(--interactive-accent);
+					color: var(--text-on-accent);
+					border: none;
+				}
+				.cancel-btn {
+					background: var(--background-secondary);
+					border: 1px solid var(--background-modifier-border);
+				}
+			`;
+			document.head.appendChild(style);
+
+			modal.appendChild(selector);
+			document.body.appendChild(modal);
+
+			// Handle selection
+			selector.addEventListener('click', async (e) => {
+				const target = e.target as HTMLElement;
+				
+				if (target.classList.contains('cancel-btn')) {
+					document.body.removeChild(modal);
+					document.head.removeChild(style);
+					resolve(null);
+					return;
+				}
+
+				if (target.classList.contains('apply-btn')) {
+					const checkboxes = selector.querySelectorAll('input[type="checkbox"]:checked') as NodeListOf<HTMLInputElement>;
+					const selectedFolders = Array.from(checkboxes).map(cb => cb.value);
+					
+					// Save selected folders to settings
+					this.settings.selectedFolders = selectedFolders;
+					await this.saveSettings();
+					
+					document.body.removeChild(modal);
+					document.head.removeChild(style);
+					
+					// Return the base path with selected folders info
+					resolve(`${this.vaultPath}/* (${selectedFolders.length} folders selected)`);
+				}
+			});
+		});
+	}
+
+	/**
+	 * Get vault folders including hidden ones (Working Copy approach)
+	 */
+	getVaultFoldersIncludingHidden(): string[] {
+		const folders = ['.obsidian']; // Always include .obsidian as it's essential
+		
+		// Add common Obsidian folders
+		const commonFolders = [
+			'Templates',
+			'Attachments', 
+			'Daily Notes',
+			'_resources',
+			'_templates',
+			'_attachments'
+		];
+		
+		// Add user's actual folders if we can access them
+		try {
+			if (this.app.vault.adapter && typeof this.app.vault.adapter.list === 'function') {
+				// Try to get actual folder list from Obsidian's vault adapter
+				this.app.vault.adapter.list('/').then((files) => {
+					files.folders.forEach(folder => {
+						if (!folders.includes(folder)) {
+							folders.push(folder);
+						}
+					});
+				}).catch(() => {
+					// Fallback to common folders if listing fails
+					commonFolders.forEach(folder => {
+						if (!folders.includes(folder)) {
+							folders.push(folder);
+						}
+					});
+				});
+			}
+		} catch (error) {
+			console.log('Could not access vault folder list, using defaults');
+			commonFolders.forEach(folder => {
+				if (!folders.includes(folder)) {
+					folders.push(folder);
+				}
+			});
+		}
+		
+		return folders.sort();
+	}
+
+	/**
+	 * Deep device configuration analysis to find encryption mismatches
+	 */
+	async analyzeDeviceConfigurations(): Promise<any> {
+		try {
+			const config = await this.getSyncthingConfig();
+			const devices = await this.getDeviceList();
+			const analysis: any = {
+				deviceCount: devices.length,
+				folderCount: config.folders.length,
+				encryptionMismatches: [] as any[],
+				deviceIssues: [] as any[],
+				recommendations: [] as string[]
+			};
+
+			// Analyze each device
+			for (const device of devices) {
+				const deviceInfo: any = {
+					id: device.deviceID,
+					name: device.name,
+					connected: device.connected,
+					folders: [] as any[]
+				};
+
+				// Check each folder this device participates in
+				for (const folder of config.folders) {
+					const deviceInFolder = folder.devices?.find((d: any) => d.deviceID === device.deviceID);
+					if (deviceInFolder) {
+						const hasEncryption = deviceInFolder.encryptionPassword && deviceInFolder.encryptionPassword.length > 0;
+						deviceInfo.folders.push({
+							id: folder.id,
+							encrypted: hasEncryption,
+							password: deviceInFolder.encryptionPassword ? '***' : 'none'
+						});
+					}
+				}
+
+				analysis.deviceIssues.push(deviceInfo);
+			}
+
+			// Find encryption mismatches between devices for the same folder
+			for (const folder of config.folders) {
+				const encryptionStates = new Map();
+				
+				for (const device of folder.devices || []) {
+					const hasEncryption = device.encryptionPassword && device.encryptionPassword.length > 0;
+					const deviceInfo = devices.find(d => d.deviceID === device.deviceID);
+					const deviceName = deviceInfo ? deviceInfo.name : device.deviceID.substring(0, 8);
+					
+					encryptionStates.set(device.deviceID, {
+						name: deviceName,
+						encrypted: hasEncryption,
+						password: device.encryptionPassword
+					});
+				}
+
+				// Check if all devices have consistent encryption for this folder
+				const encryptionValues = Array.from(encryptionStates.values());
+				const hasInconsistency = encryptionValues.some(v => v.encrypted) && encryptionValues.some(v => !v.encrypted);
+
+				if (hasInconsistency) {
+					analysis.encryptionMismatches.push({
+						folderId: folder.id,
+						devices: encryptionStates,
+						issue: 'Mixed encryption states detected'
+					});
+				}
+			}
+
+			// Generate recommendations
+			if (analysis.encryptionMismatches.length > 0) {
+				analysis.recommendations.push('Fix encryption mismatches by ensuring all devices use the same encryption settings for shared folders');
+			}
+
+			if (this.isMobile) {
+				analysis.recommendations.push('Ensure vault is in Files app accessible location for iOS sync');
+			}
+
+			return analysis;
+		} catch (error) {
+			console.error('Failed to analyze device configurations:', error);
+			throw error;
+		}
+	}
+
+	/**
+	 * Get device list from Syncthing API
+	 */
+	async getDeviceList(): Promise<any[]> {
+		try {
+			const config = await this.getSyncthingConfig();
+			return config.devices || [];
+		} catch (error) {
+			console.error('Failed to get device list:', error);
+			return [];
+		}
+	}
+
+	/**
+	 * Force consistent encryption across all devices (nuclear option)
+	 */
+	async forceConsistentEncryption(): Promise<boolean> {
+		try {
+			const config = await this.getSyncthingConfig();
+			let hasChanges = false;
+
+			// Force all devices in all folders to use the current plugin settings
+			for (const folder of config.folders) {
+				for (const device of folder.devices || []) {
+					const currentPassword = device.encryptionPassword || '';
+					const targetPassword = this.settings.encryptionEnabled ? this.settings.encryptionPassword : '';
+
+					if (currentPassword !== targetPassword) {
+						device.encryptionPassword = targetPassword;
+						hasChanges = true;
+						console.log(`Updated encryption for device ${device.deviceID} in folder ${folder.id}`);
+					}
+				}
+			}
+
+			// Also update defaults to prevent future issues
+			if (config.defaults && config.defaults.folder && config.defaults.folder.device) {
+				const targetPassword = this.settings.encryptionEnabled ? this.settings.encryptionPassword : '';
+				if (config.defaults.folder.device.encryptionPassword !== targetPassword) {
+					config.defaults.folder.device.encryptionPassword = targetPassword;
+					hasChanges = true;
+				}
+			}
+
+			if (hasChanges) {
+				console.log('Forcing consistent encryption across all devices...');
+				const success = await this.updateSyncthingConfig(config);
+				if (success) {
+					new Notice('✅ Forced consistent encryption across all devices. Restart Syncthing to apply changes.', 8000);
+				}
+				return success;
+			} else {
+				new Notice('✅ All devices already have consistent encryption settings', 5000);
+				return true;
+			}
+		} catch (error) {
+			console.error('Failed to force consistent encryption:', error);
+			return false;
+		}
+	}
+
 	updateStatusBar(): void {
 		this.monitor.isSyncthingRunning().then(isRunning => {
 			// Display status icon in status bar
@@ -3151,6 +3639,45 @@ class SettingTab extends PluginSettingTab {
 				await this.plugin.saveSettings();
 			});
 
+			// iOS Folder Selection
+			const folderSelectionGroup = iosSection.createDiv('syncthing-form-group');
+			folderSelectionGroup.createEl('label', { cls: 'syncthing-label', text: 'Sync Folder Selection' });
+			const folderPickerBtn = folderSelectionGroup.createEl('button', {
+				cls: 'syncthing-btn secondary',
+				text: '📁 Choose Folders to Sync'
+			});
+			folderPickerBtn.addEventListener('click', async () => {
+				const selectedPath = await this.plugin.showIOSFolderPicker();
+				if (selectedPath) {
+					this.plugin.settings.customSyncPath = selectedPath;
+					await this.plugin.saveSettings();
+					new Notice(`Selected sync path: ${selectedPath}`, 5000);
+					folderPathDisplay.textContent = selectedPath;
+				}
+			});
+
+			const folderPathDisplay = folderSelectionGroup.createDiv({
+				cls: 'syncthing-help-text',
+				text: this.plugin.settings.customSyncPath || 'No custom path selected - using vault root'
+			});
+
+			// Force consistent encryption for iOS
+			const forceEncryptionGroup = iosSection.createDiv('syncthing-form-group');
+			const forceEncryptionCheckbox = forceEncryptionGroup.createEl('label', { cls: 'syncthing-checkbox' });
+			const forceEncryptionInput = forceEncryptionCheckbox.createEl('input', { attr: { type: 'checkbox' } });
+			forceEncryptionInput.checked = this.plugin.settings.forceConsistentEncryption;
+			forceEncryptionCheckbox.createSpan({ text: 'Force consistent encryption across devices' });
+			forceEncryptionGroup.createDiv({
+				cls: 'syncthing-help-text',
+				text: 'Automatically fixes encryption mismatches by forcing all devices to use the same settings.'
+			});
+
+			// Auto-save force encryption setting
+			forceEncryptionInput.addEventListener('change', async () => {
+				this.plugin.settings.forceConsistentEncryption = forceEncryptionInput.checked;
+				await this.plugin.saveSettings();
+			});
+
 			// Add iOS guidance
 			const iosGuidanceDiv = iosSection.createDiv('syncthing-form-group');
 			iosGuidanceDiv.createEl('h4', { text: 'iOS Setup Guide:' });
@@ -3158,7 +3685,7 @@ class SettingTab extends PluginSettingTab {
 			guidanceList.createEl('li', { text: 'Ensure your vault is in a Files app accessible location (iCloud Drive, On My iPhone/iPad)' });
 			guidanceList.createEl('li', { text: 'Configure the remote Syncthing URL to point to your server/desktop instance' });
 			guidanceList.createEl('li', { text: 'Verify all devices use the same encryption settings to avoid sync conflicts' });
-			guidanceList.createEl('li', { text: 'Use the same folder configuration across all devices' });
+			guidanceList.createEl('li', { text: 'Use the folder picker above to select which folders to sync (including hidden .obsidian)' });
 		}
 
 		// Encryption Fix Tools Section
@@ -3194,6 +3721,112 @@ class SettingTab extends PluginSettingTab {
 				new Notice('✅ Hardcoded encryption removed. All encryption is now configurable via plugin settings.', 5000);
 			} else {
 				new Notice('❌ Failed to remove hardcoded encryption. Check your API key and connection.', 5000);
+			}
+		});
+
+		const analyzeBtn = fixSection.createEl('button', {
+			cls: 'syncthing-btn secondary',
+			text: '🔬 Deep Device Analysis'
+		});
+		analyzeBtn.addEventListener('click', async () => {
+			new Notice('Analyzing device configurations...', 3000);
+			try {
+				const analysis = await this.plugin.analyzeDeviceConfigurations();
+				
+				// Display analysis results
+				const modal = document.createElement('div');
+				modal.style.cssText = `
+					position: fixed;
+					top: 0;
+					left: 0;
+					width: 100%;
+					height: 100%;
+					background: rgba(0,0,0,0.5);
+					z-index: 1000;
+					display: flex;
+					align-items: center;
+					justify-content: center;
+				`;
+
+				const content = document.createElement('div');
+				content.style.cssText = `
+					background: var(--background-primary);
+					border-radius: 12px;
+					padding: 20px;
+					max-width: 80%;
+					max-height: 80%;
+					overflow-y: auto;
+					box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+				`;
+
+				let analysisHTML = `
+					<h2>Device Configuration Analysis</h2>
+					<p><strong>Devices:</strong> ${analysis.deviceCount} | <strong>Folders:</strong> ${analysis.folderCount}</p>
+				`;
+
+				if (analysis.encryptionMismatches.length > 0) {
+					analysisHTML += `<h3 style="color: #e74c3c;">🚨 Encryption Mismatches Found</h3>`;
+					analysis.encryptionMismatches.forEach((mismatch: any) => {
+						analysisHTML += `<div style="background: var(--background-secondary); padding: 10px; margin: 10px 0; border-radius: 6px;">`;
+						analysisHTML += `<strong>Folder:</strong> ${mismatch.folderId}<br>`;
+						analysisHTML += `<strong>Issue:</strong> ${mismatch.issue}<br>`;
+						analysisHTML += `<strong>Devices:</strong><br>`;
+						mismatch.devices.forEach((device: any, id: string) => {
+							analysisHTML += `- ${device.name}: ${device.encrypted ? 'Encrypted' : 'Plain'}<br>`;
+						});
+						analysisHTML += `</div>`;
+					});
+				} else {
+					analysisHTML += `<h3 style="color: #27ae60;">✅ No Encryption Mismatches</h3>`;
+				}
+
+				if (analysis.recommendations.length > 0) {
+					analysisHTML += `<h3>💡 Recommendations</h3><ul>`;
+					analysis.recommendations.forEach((rec: string) => {
+						analysisHTML += `<li>${rec}</li>`;
+					});
+					analysisHTML += `</ul>`;
+				}
+
+				analysisHTML += `
+					<div style="margin-top: 20px; text-align: center;">
+						<button id="close-analysis" style="padding: 8px 16px; background: var(--interactive-accent); color: var(--text-on-accent); border: none; border-radius: 6px; cursor: pointer;">Close</button>
+					</div>
+				`;
+
+				content.innerHTML = analysisHTML;
+				modal.appendChild(content);
+				document.body.appendChild(modal);
+
+				document.getElementById('close-analysis')?.addEventListener('click', () => {
+					document.body.removeChild(modal);
+				});
+
+				modal.addEventListener('click', (e) => {
+					if (e.target === modal) {
+						document.body.removeChild(modal);
+					}
+				});
+
+			} catch (error) {
+				new Notice('❌ Failed to analyze device configurations. Check your connection.', 5000);
+			}
+		});
+
+		const forceConsistentBtn = fixSection.createEl('button', {
+			cls: 'syncthing-btn warning',
+			text: '⚡ Force Consistent Encryption (Nuclear Option)'
+		});
+		forceConsistentBtn.addEventListener('click', async () => {
+			const confirmation = confirm('This will force ALL devices to use the current plugin encryption settings. This action cannot be undone. Continue?');
+			if (confirmation) {
+				new Notice('Forcing consistent encryption across all devices...', 3000);
+				const success = await this.plugin.forceConsistentEncryption();
+				if (success) {
+					new Notice('✅ Forced consistent encryption. Please restart Syncthing on all devices.', 8000);
+				} else {
+					new Notice('❌ Failed to force consistent encryption. Check your API key and connection.', 5000);
+				}
 			}
 		});
 
