@@ -254,6 +254,56 @@ If your plugin does not need CSS, delete this file.
     display: flex;
     align-items: center;
     gap: 8px;
+    margin: 4px 0;
+}
+
+/* Warning Card Styles */
+.syncthing-warning-card {
+    background: var(--background-modifier-error);
+    border: 1px solid var(--background-modifier-error-border);
+    border-radius: 6px;
+    padding: 16px;
+    margin: 12px 0;
+}
+
+.syncthing-warning-text {
+    color: var(--text-error);
+    font-size: 14px;
+    font-weight: 500;
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    line-height: 1.4;
+}
+
+/* Manual Configuration Styles */
+.syncthing-manual-config {
+    background: var(--background-secondary);
+    border-radius: 6px;
+    padding: 16px;
+    margin: 12px 0;
+    border: 1px solid var(--background-modifier-border);
+}
+
+.syncthing-manual-config h5 {
+    margin: 0 0 12px 0;
+    color: var(--text-normal);
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.syncthing-manual-config .syncthing-input.small {
+    font-size: 13px;
+    padding: 8px 12px;
+    margin: 4px 8px 4px 0;
+    min-width: 200px;
+    flex: 1;
+}
+
+.syncthing-manual-config .syncthing-btn.small {
+    font-size: 13px;
+    padding: 8px 12px;
+    margin: 4px 4px 4px 0;
 }
 
 /* Auth subsection styling */

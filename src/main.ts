@@ -12,6 +12,7 @@
  */
 
 import { App, FileSystemAdapter, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import { IOSFileManager, IOSDirectoryListing, IOSFileItem } from './ios-file-manager';
 
 // Platform detection for mobile - must work without any Node.js APIs
 function detectMobilePlatform(): boolean {
@@ -815,6 +816,7 @@ export default class Obsyncth extends Plugin {
 	private syncthingInstance: any | null = null;
 	private syncthingLastSyncDate: string = "no data";
 	monitor: SyncthingMonitor;
+	iosFileManager: IOSFileManager | null = null;
 
 	private statusBarConnectionIconItem: HTMLElement | null = this.addStatusBarItem();
 	private statusBarLastSyncTextItem: HTMLElement | null = this.addStatusBarItem();
@@ -832,6 +834,24 @@ export default class Obsyncth extends Plugin {
 		if (this.isMobile && !this.settings.mobileMode) {
 			this.settings.mobileMode = true;
 			await this.saveSettings();
+		}
+
+		// Initialize iOS file manager on mobile platforms
+		if (this.isMobile) {
+			this.iosFileManager = new IOSFileManager(this.app.vault, {
+				selectedVaultPath: this.settings.selectedVaultPath,
+				syncedFiles: this.settings.syncedFiles,
+				ignorePatterns: this.settings.ignorePatterns,
+				allowHiddenFiles: this.settings.allowHiddenFiles,
+				manualFileMapping: {}
+			});
+			
+			const initialized = await this.iosFileManager.initialize();
+			if (initialized) {
+				console.log('iOS File Manager initialized successfully');
+			} else {
+				console.warn('iOS File Manager initialization failed');
+			}
 		}
 
 		let adapter = this.app.vault.adapter;
@@ -1804,99 +1824,27 @@ export default class Obsyncth extends Plugin {
 	/**
 	 * iOS Native Folder Picker - Working Copy style implementation
 	 */
-	async showIOSFolderPicker(): Promise<string | null> {
-		try {
-			// Use HTML5 file picker with directory support for iOS
-			const input = document.createElement('input');
-			input.type = 'file';
-			input.webkitdirectory = true; // iOS Files app support
-			input.multiple = true;
-			input.style.display = 'none';
-			
-			document.body.appendChild(input);
-			
-			return new Promise((resolve) => {
-				input.onchange = async (event: any) => {
-					const files = event.target.files;
-					if (files && files.length > 0) {
-						// Get the common path from the first file
-						const firstFile = files[0];
-						const fullPath = firstFile.webkitRelativePath || firstFile.name;
-						const folderPath = fullPath.substring(0, fullPath.lastIndexOf('/'));
-						
-						new Notice(`Processing ${files.length} files from selected folder...`, 3000);
-						
-						// Store selected files for processing
-						await this.processSelectedFiles(files);
-						
-						document.body.removeChild(input);
-						resolve(folderPath || 'Selected Folder');
-					} else {
-						document.body.removeChild(input);
-						resolve(null);
-					}
-				};
-				
-				input.oncancel = () => {
-					document.body.removeChild(input);
-					resolve(null);
-				};
-				
-				// Trigger the picker
-				input.click();
-			});
-		} catch (error) {
-			console.error('iOS folder picker error:', error);
-			new Notice('Failed to open folder picker. Please ensure you\'re using a compatible iOS version.', 5000);
-			return null;
-		}
-	}
-
-	/**
-	 * Process selected files from iOS picker - Working Copy style
-	 */
-	async processSelectedFiles(files: FileList): Promise<void> {
-		try {
-			const fileStructure: { [path: string]: boolean } = {};
-			
-			// Process all files including hidden ones
-			for (let i = 0; i < files.length; i++) {
-				const file = files[i];
-				const relativePath = file.webkitRelativePath || file.name;
-				
-				// Include all files by default, including hidden ones
-				fileStructure[relativePath] = true;
-				
-				// Also track parent directories
-				const pathParts = relativePath.split('/');
-				for (let j = 1; j < pathParts.length; j++) {
-					const parentPath = pathParts.slice(0, j).join('/');
-					if (!fileStructure.hasOwnProperty(parentPath)) {
-						fileStructure[parentPath] = true;
-					}
-				}
-			}
-			
-			// Update settings with discovered files
-			this.settings.syncedFiles = fileStructure;
-			await this.saveSettings();
-			
-			console.log(`Processed ${Object.keys(fileStructure).length} files and folders from iOS picker`);
-			new Notice(`Discovered ${Object.keys(fileStructure).length} items. Use File Manager to customize sync selection.`, 5000);
-			
-		} catch (error) {
-			console.error('Error processing selected files:', error);
-		}
-	}
-
 	/**
 	 * Get file/folder listing for built-in file manager
 	 */
 	async getDirectoryListing(currentPath: string = ''): Promise<DirectoryListing> {
 		try {
-			// On iOS/mobile, work with the processed file structure
-			if (this.isMobile || this.settings.mobileMode) {
-				return this.getIOSDirectoryListing(currentPath);
+			// On iOS/mobile, use the iOS file manager
+			if ((this.isMobile || this.settings.mobileMode) && this.iosFileManager) {
+				const listing = await this.iosFileManager.getDirectoryListing(currentPath);
+				// Convert IOSDirectoryListing to DirectoryListing format
+				return {
+					path: listing.path,
+					items: listing.items.map(item => ({
+						name: item.name,
+						path: item.path,
+						type: item.type,
+						isHidden: item.isHidden,
+						isSelected: item.isSelected
+					})),
+					canGoUp: listing.canGoUp,
+					parentPath: listing.canGoUp && currentPath ? (currentPath.lastIndexOf('/') > 0 ? currentPath.substring(0, currentPath.lastIndexOf('/')) : '') : undefined
+				};
 			}
 			
 			// Desktop implementation using Node.js fs
@@ -1923,95 +1871,6 @@ export default class Obsyncth extends Plugin {
 	/**
 	 * iOS directory listing from processed files
 	 */
-	private getIOSDirectoryListing(currentPath: string): DirectoryListing {
-		const items: FileItem[] = [];
-		const processedPaths = new Set<string>();
-		
-		// If no files have been selected yet, show a helpful message
-		if (Object.keys(this.settings.syncedFiles).length === 0) {
-			return {
-				path: currentPath,
-				items: [{
-					name: 'No folder selected',
-					path: '',
-					type: 'file',
-					isHidden: false,
-					isSelected: false
-				}],
-				canGoUp: false
-			};
-		}
-		
-		// Get all files/folders at current level
-		Object.keys(this.settings.syncedFiles).forEach(filePath => {
-			if (currentPath === '') {
-				// Root level - get top-level items
-				const topLevel = filePath.split('/')[0];
-				if (!processedPaths.has(topLevel)) {
-					processedPaths.add(topLevel);
-					
-					const isFolder = Object.keys(this.settings.syncedFiles).some(p => 
-						p.startsWith(topLevel + '/') && p !== topLevel
-					);
-					
-					items.push({
-						name: topLevel,
-						path: topLevel,
-						type: isFolder ? 'folder' : 'file',
-						isHidden: topLevel.startsWith('.'),
-						isSelected: this.settings.syncedFiles[topLevel] !== undefined ? this.settings.syncedFiles[topLevel] : true,
-						children: isFolder ? [] : undefined
-					});
-				}
-			} else {
-				// Subdirectory level
-				const prefix = currentPath + '/';
-				if (filePath.startsWith(prefix)) {
-					const relativePath = filePath.substring(prefix.length);
-					const nextLevel = relativePath.split('/')[0];
-					
-					if (!processedPaths.has(nextLevel)) {
-						processedPaths.add(nextLevel);
-						
-						const fullPath = currentPath + '/' + nextLevel;
-						const isFolder = Object.keys(this.settings.syncedFiles).some(p => 
-							p.startsWith(fullPath + '/') && p !== fullPath
-						);
-						
-						items.push({
-							name: nextLevel,
-							path: fullPath,
-							type: isFolder ? 'folder' : 'file',
-							isHidden: nextLevel.startsWith('.'),
-							isSelected: this.settings.syncedFiles[fullPath] !== undefined ? this.settings.syncedFiles[fullPath] : true,
-							children: isFolder ? [] : undefined
-						});
-					}
-				}
-			}
-		});
-		
-		// Sort items: folders first, then files, hidden items at end if not showing hidden
-		items.sort((a, b) => {
-			if (a.type !== b.type) {
-				return a.type === 'folder' ? -1 : 1;
-			}
-			if (!this.settings.allowHiddenFiles) {
-				if (a.isHidden !== b.isHidden) {
-					return a.isHidden ? 1 : -1;
-				}
-			}
-			return a.name.localeCompare(b.name);
-		});
-		
-		return {
-			path: currentPath,
-			items: items,
-			canGoUp: currentPath !== '',
-			parentPath: currentPath ? currentPath.substring(0, currentPath.lastIndexOf('/')) : undefined
-		};
-	}
-
 	/**
 	 * Desktop directory listing using Node.js fs
 	 */
@@ -2085,22 +1944,30 @@ export default class Obsyncth extends Plugin {
 	 * Toggle file/folder selection in file manager
 	 */
 	async toggleFileSelection(filePath: string, selected: boolean): Promise<void> {
-		this.settings.syncedFiles[filePath] = selected;
-		
-		// If selecting a folder, optionally select all children
-		if (selected) {
-			Object.keys(this.settings.syncedFiles).forEach(path => {
-				if (path.startsWith(filePath + '/')) {
-					this.settings.syncedFiles[path] = true;
-				}
-			});
+		// Use iOS file manager on mobile platforms
+		if ((this.isMobile || this.settings.mobileMode) && this.iosFileManager) {
+			await this.iosFileManager.toggleFileSelection(filePath, selected);
+			// Sync the settings with iOS file manager
+			this.settings.syncedFiles = this.iosFileManager.getSyncedFiles();
 		} else {
-			// If deselecting a folder, deselect all children
-			Object.keys(this.settings.syncedFiles).forEach(path => {
-				if (path.startsWith(filePath + '/')) {
-					this.settings.syncedFiles[path] = false;
-				}
-			});
+			// Desktop implementation
+			this.settings.syncedFiles[filePath] = selected;
+			
+			// If selecting a folder, optionally select all children
+			if (selected) {
+				Object.keys(this.settings.syncedFiles).forEach(path => {
+					if (path.startsWith(filePath + '/')) {
+						this.settings.syncedFiles[path] = true;
+					}
+				});
+			} else {
+				// If deselecting a folder, deselect all children
+				Object.keys(this.settings.syncedFiles).forEach(path => {
+					if (path.startsWith(filePath + '/')) {
+						this.settings.syncedFiles[path] = false;
+					}
+				});
+			}
 		}
 		
 		await this.saveSettings();
@@ -4044,17 +3911,25 @@ class SettingTab extends PluginSettingTab {
 			});
 			
 			pickerBtn.addEventListener('click', async () => {
+				if (!this.plugin.iosFileManager) {
+					new Notice('iOS File Manager not initialized', 3000);
+					return;
+				}
+				
 				new Notice('Opening iOS folder picker...', 3000);
-				const selectedPath = await this.plugin.showIOSFolderPicker();
-				if (selectedPath) {
-					this.plugin.settings.selectedVaultPath = selectedPath;
+				const result = await this.plugin.iosFileManager.selectVaultFolder();
+				
+				if (result.success && result.filesProcessed > 0) {
+					this.plugin.settings.selectedVaultPath = result.selectedPath || 'Selected Directory';
+					this.plugin.settings.syncedFiles = this.plugin.iosFileManager.getSyncedFiles();
 					await this.plugin.saveSettings();
-					new Notice(`Folder processed successfully! Found ${Object.keys(this.plugin.settings.syncedFiles).length} items.`, 5000);
+					new Notice(`Folder processed successfully! Found ${result.filesProcessed} items.`, 5000);
 					// Clear the container and re-render to show the updated file tree
 					container.empty();
 					this.renderFileManagerTab(container);
 				} else {
-					new Notice('No folder selected or processing failed', 3000);
+					const errorMsg = result.error || 'No folder selected or processing failed';
+					new Notice(errorMsg, 3000);
 				}
 			});
 			
