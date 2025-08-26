@@ -539,29 +539,43 @@ class SyncthingMonitor extends EventEmitter {
 
 				try {
 					const data: ConnectionsResponse = JSON.parse(body);
-					const connectionsArray = Object.values(data.connections);
+					const connections = data.connections || {};
 
-					this.availableDevices = connectionsArray.length;
-					this.connectedDevicesCount = connectionsArray.filter(conn => conn.connected).length;
+					// Get our device ID to exclude from count
+					// We'll need to make another request to get our device ID
+					this.getCurrentDeviceId().then(myDeviceId => {
+						// Filter out our own device when counting
+						const otherDevices = Object.keys(connections).filter(deviceId => deviceId !== myDeviceId);
+						this.availableDevices = otherDevices.length;
+						this.connectedDevicesCount = otherDevices.filter(deviceId => connections[deviceId]?.connected).length;
 
-					// Update status based on connections
-					if (this.connectedDevicesCount === 0) {
-						this.setStatusIcon('🔴');
-						this.status = "No devices connected";
-					} else if (this.status === "idle") {
-						this.setStatusIcon('🟢');
-					}
+						console.log(`Desktop connections: ${this.connectedDevicesCount}/${this.availableDevices} devices (excluding self: ${myDeviceId})`);
+
+						// Update status based on connections
+						if (this.connectedDevicesCount === 0) {
+							this.setStatusIcon('🔴');
+							this.status = "No devices connected";
+						} else if (this.status === "idle") {
+							this.setStatusIcon('🟢');
+						}
+
+						this.emit('status-update', {
+							status: this.status,
+							fileCompletion: this.fileCompletion,
+							globalItems: this.globalItems,
+							needItems: this.needItems,
+							connectedDevicesCount: this.connectedDevicesCount,
+							availableDevices: this.availableDevices
+						});
+					}).catch(err => {
+						console.error('Failed to get device ID:', err);
+						// Fallback to old behavior
+						const connectionsArray = Object.values(connections);
+						this.availableDevices = connectionsArray.length;
+						this.connectedDevicesCount = connectionsArray.filter(conn => conn.connected).length;
+					});
 				} catch (err) {
 					console.error('Failed to parse Syncthing connections or unexpected response:', err);
-				} finally {
-					this.emit('status-update', {
-						status: this.status,
-						fileCompletion: this.fileCompletion,
-						globalItems: this.globalItems,
-						needItems: this.needItems,
-						connectedDevicesCount: this.connectedDevicesCount,
-						availableDevices: this.availableDevices
-					});
 				}
 			});
 		});
@@ -571,6 +585,45 @@ class SyncthingMonitor extends EventEmitter {
 		});
 
 		req.end();
+	}
+
+	/**
+	 * Get current device ID
+	 */
+	private async getCurrentDeviceId(): Promise<string> {
+		return new Promise((resolve, reject) => {
+			const url = new URL(this.baseUrl);
+			let hostname = url.hostname;
+			if (hostname === 'localhost') {
+				hostname = '127.0.0.1';
+			}
+			
+			const options = {
+				hostname: hostname,
+				port: parseInt(url.port) || 8384,
+				path: '/rest/system/status',
+				method: 'GET',
+				headers: {
+					'X-API-Key': this.token,
+				}
+			};
+
+			const req = http.request(options, (res) => {
+				let body = '';
+				res.on('data', chunk => { body += chunk; });
+				res.on('end', () => {
+					try {
+						const data = JSON.parse(body);
+						resolve(data.myID || '');
+					} catch (err) {
+						reject(err);
+					}
+				});
+			});
+
+			req.on('error', reject);
+			req.end();
+		});
 	}
 
 	/**
@@ -695,6 +748,18 @@ class SyncthingMonitor extends EventEmitter {
 	 */
 	private async checkConnectionsMobile() {
 		try {
+			// Get system status to get our device ID
+			const statusResponse = await fetch(`${this.baseUrl}/rest/system/status`, {
+				method: 'GET',
+				headers: this.createAuthHeaders(),
+			});
+			
+			let myDeviceId = '';
+			if (statusResponse.ok) {
+				const statusData = await statusResponse.json();
+				myDeviceId = statusData.myID || '';
+			}
+
 			const response = await fetch(`${this.baseUrl}/rest/system/connections`, {
 				method: 'GET',
 				headers: this.createAuthHeaders(),
@@ -704,8 +769,12 @@ class SyncthingMonitor extends EventEmitter {
 				const connectionsData = await response.json() as ConnectionsResponse;
 				const connections = connectionsData.connections || {};
 				
-				this.connectedDevicesCount = Object.values(connections).filter(connection => connection.connected).length;
-				this.availableDevices = Object.keys(connections).length;
+				// Filter out our own device when counting
+				const otherDevices = Object.keys(connections).filter(deviceId => deviceId !== myDeviceId);
+				this.connectedDevicesCount = otherDevices.filter(deviceId => connections[deviceId]?.connected).length;
+				this.availableDevices = otherDevices.length;
+				
+				console.log(`Mobile connections: ${this.connectedDevicesCount}/${this.availableDevices} devices (excluding self: ${myDeviceId})`);
 			}
 		} catch (error) {
 			console.error('Error checking mobile connections:', error);
@@ -1747,7 +1816,7 @@ export default class Obsyncth extends Plugin {
 			document.body.appendChild(input);
 			
 			return new Promise((resolve) => {
-				input.onchange = (event: any) => {
+				input.onchange = async (event: any) => {
 					const files = event.target.files;
 					if (files && files.length > 0) {
 						// Get the common path from the first file
@@ -1755,11 +1824,13 @@ export default class Obsyncth extends Plugin {
 						const fullPath = firstFile.webkitRelativePath || firstFile.name;
 						const folderPath = fullPath.substring(0, fullPath.lastIndexOf('/'));
 						
+						new Notice(`Processing ${files.length} files from selected folder...`, 3000);
+						
 						// Store selected files for processing
-						this.processSelectedFiles(files);
+						await this.processSelectedFiles(files);
 						
 						document.body.removeChild(input);
-						resolve(folderPath);
+						resolve(folderPath || 'Selected Folder');
 					} else {
 						document.body.removeChild(input);
 						resolve(null);
@@ -1856,6 +1927,21 @@ export default class Obsyncth extends Plugin {
 		const items: FileItem[] = [];
 		const processedPaths = new Set<string>();
 		
+		// If no files have been selected yet, show a helpful message
+		if (Object.keys(this.settings.syncedFiles).length === 0) {
+			return {
+				path: currentPath,
+				items: [{
+					name: 'No folder selected',
+					path: '',
+					type: 'file',
+					isHidden: false,
+					isSelected: false
+				}],
+				canGoUp: false
+			};
+		}
+		
 		// Get all files/folders at current level
 		Object.keys(this.settings.syncedFiles).forEach(filePath => {
 			if (currentPath === '') {
@@ -1873,7 +1959,7 @@ export default class Obsyncth extends Plugin {
 						path: topLevel,
 						type: isFolder ? 'folder' : 'file',
 						isHidden: topLevel.startsWith('.'),
-						isSelected: this.settings.syncedFiles[topLevel] || false,
+						isSelected: this.settings.syncedFiles[topLevel] !== undefined ? this.settings.syncedFiles[topLevel] : true,
 						children: isFolder ? [] : undefined
 					});
 				}
@@ -1897,7 +1983,7 @@ export default class Obsyncth extends Plugin {
 							path: fullPath,
 							type: isFolder ? 'folder' : 'file',
 							isHidden: nextLevel.startsWith('.'),
-							isSelected: this.settings.syncedFiles[fullPath] || false,
+							isSelected: this.settings.syncedFiles[fullPath] !== undefined ? this.settings.syncedFiles[fullPath] : true,
 							children: isFolder ? [] : undefined
 						});
 					}
@@ -2018,7 +2104,10 @@ export default class Obsyncth extends Plugin {
 		}
 		
 		await this.saveSettings();
+		
+		// Generate and apply ignore patterns
 		this.updateIgnorePatterns();
+		await this.applySyncthingIgnorePatterns();
 	}
 
 	/**
@@ -2032,12 +2121,14 @@ export default class Obsyncth extends Plugin {
 			const isSelected = this.settings.syncedFiles[filePath];
 			
 			if (!isSelected) {
-				// Add to ignore patterns
-				ignorePatterns.push(filePath);
-				
-				// Also ignore everything under this path if it's a folder
-				if (!filePath.includes('.') || filePath.endsWith('/')) {
-					ignorePatterns.push(filePath + '/**');
+				// Add to ignore patterns - convert to Syncthing format
+				if (filePath.endsWith('/') || !filePath.includes('.')) {
+					// It's a folder - ignore it and all contents
+					ignorePatterns.push(filePath.replace(/\/$/, '') + '/**');
+					ignorePatterns.push(filePath.replace(/\/$/, ''));
+				} else {
+					// It's a file
+					ignorePatterns.push(filePath);
 				}
 			}
 		});
@@ -2057,10 +2148,23 @@ export default class Obsyncth extends Plugin {
 		try {
 			const config = await this.getSyncthingConfig();
 			
-			// Find the vault folder
-			const vaultFolder = config.folders.find((f: any) => f.id === this.settings.vaultFolderID);
+			// Find the vault folder - use the first folder if no specific ID is set
+			let vaultFolder;
+			if (this.settings.vaultFolderID) {
+				vaultFolder = config.folders.find((f: any) => f.id === this.settings.vaultFolderID);
+			} else {
+				// Find folder that contains our vault path or use the first folder
+				vaultFolder = config.folders.find((f: any) => {
+					return f.path && (
+						f.path.includes(this.vaultName) ||
+						f.path.endsWith('vault') ||
+						f.path.includes('obsidian')
+					);
+				}) || config.folders[0];
+			}
+			
 			if (!vaultFolder) {
-				new Notice('Vault folder not found in Syncthing configuration', 5000);
+				new Notice('No Syncthing folder found to apply ignore patterns', 5000);
 				return false;
 			}
 			
@@ -2070,12 +2174,15 @@ export default class Obsyncth extends Plugin {
 			// Update the configuration
 			const success = await this.updateSyncthingConfig(config);
 			if (success) {
-				new Notice(`Applied ${this.settings.ignorePatterns.length} ignore patterns to Syncthing`, 3000);
+				new Notice(`Applied ${this.settings.ignorePatterns.length} ignore patterns to folder "${vaultFolder.id}"`, 3000);
+			} else {
+				new Notice('Failed to apply ignore patterns to Syncthing', 5000);
 			}
 			
 			return success;
 		} catch (error) {
 			console.error('Failed to apply ignore patterns:', error);
+			new Notice(`Failed to apply ignore patterns: ${error.message}`, 5000);
 			return false;
 		}
 	}
@@ -3349,23 +3456,6 @@ class SettingTab extends PluginSettingTab {
 			await this.plugin.saveSettings();
 		});
 
-		const folderIdGroup = apiSection.createDiv('syncthing-form-group');
-		folderIdGroup.createEl('label', { cls: 'syncthing-label', text: 'Vault Folder ID' });
-		const folderIdInput = folderIdGroup.createEl('input', {
-			cls: 'syncthing-input',
-			attr: { type: 'text', value: this.plugin.settings.vaultFolderID, placeholder: 'Enter vault folder ID' }
-		});
-		folderIdGroup.createDiv({
-			cls: 'syncthing-help-text',
-			text: 'ID of the folder containing your vault (found in Syncthing GUI → Folders)'
-		});
-
-		// Auto-save folder ID on input
-		folderIdInput.addEventListener('input', async () => {
-			this.plugin.settings.vaultFolderID = folderIdInput.value;
-			await this.plugin.saveSettings();
-		});
-
 		// Connection Mode Section
 		const modeSection = container.createDiv('syncthing-section');
 		modeSection.createEl('h3', { cls: 'syncthing-section-title', text: '📱 Connection Mode' });
@@ -3479,126 +3569,6 @@ class SettingTab extends PluginSettingTab {
 			await this.plugin.saveSettings();
 		});
 
-		// Encryption Configuration Section
-		const encryptionSection = container.createDiv('syncthing-section');
-		encryptionSection.createEl('h3', { cls: 'syncthing-section-title', text: '🔒 Encryption Configuration' });
-		encryptionSection.createDiv({
-			cls: 'syncthing-section-description',
-			text: 'Configure folder encryption settings. IMPORTANT: All devices sharing a folder must use the same encryption settings to avoid sync errors.'
-		});
-
-		const encryptionEnabledGroup = encryptionSection.createDiv('syncthing-form-group');
-		const encryptionEnabledCheckbox = encryptionEnabledGroup.createEl('label', { cls: 'syncthing-checkbox' });
-		const encryptionEnabledInput = encryptionEnabledCheckbox.createEl('input', { attr: { type: 'checkbox' } });
-		encryptionEnabledInput.checked = this.plugin.settings.encryptionEnabled;
-		encryptionEnabledCheckbox.createSpan({ text: 'Enable folder encryption' });
-
-		// Auto-save encryption enabled setting
-		encryptionEnabledInput.addEventListener('change', async () => {
-			this.plugin.settings.encryptionEnabled = encryptionEnabledInput.checked;
-			await this.plugin.saveSettings();
-			
-			// Show/hide password field based on checkbox
-			if (this.plugin.settings.encryptionEnabled) {
-				encryptionPasswordGroup.style.display = 'block';
-			} else {
-				encryptionPasswordGroup.style.display = 'none';
-			}
-		});
-
-		const encryptionPasswordGroup = encryptionSection.createDiv('syncthing-form-group');
-		encryptionPasswordGroup.createEl('label', { cls: 'syncthing-label', text: 'Encryption Password' });
-		const encryptionPasswordInput = encryptionPasswordGroup.createEl('input', {
-			cls: 'syncthing-input',
-			attr: { type: 'password', value: this.plugin.settings.encryptionPassword, placeholder: 'Enter encryption password' }
-		});
-		encryptionPasswordGroup.createDiv({
-			cls: 'syncthing-help-text',
-			text: 'This password must be identical on all devices sharing encrypted folders. Leave empty to disable encryption.'
-		});
-
-		// Auto-save encryption password
-		encryptionPasswordInput.addEventListener('input', async () => {
-			this.plugin.settings.encryptionPassword = encryptionPasswordInput.value;
-			await this.plugin.saveSettings();
-		});
-
-		// Initially hide/show password field based on encryption enabled state
-		if (!this.plugin.settings.encryptionEnabled) {
-			encryptionPasswordGroup.style.display = 'none';
-		}
-
-		// iOS/Mobile Compatibility Section
-		if (this.plugin.detectMobilePlatform() || this.plugin.settings.mobileMode) {
-			const iosSection = container.createDiv('syncthing-section');
-			iosSection.createEl('h3', { cls: 'syncthing-section-title', text: '📱 iOS/Mobile Compatibility' });
-			iosSection.createDiv({
-				cls: 'syncthing-section-description',
-				text: 'Settings to improve file synchronization on iOS and mobile platforms.'
-			});
-
-			const hiddenFilesGroup = iosSection.createDiv('syncthing-form-group');
-			const hiddenFilesCheckbox = hiddenFilesGroup.createEl('label', { cls: 'syncthing-checkbox' });
-			const hiddenFilesInput = hiddenFilesCheckbox.createEl('input', { attr: { type: 'checkbox' } });
-			hiddenFilesInput.checked = this.plugin.settings.allowHiddenFiles;
-			hiddenFilesCheckbox.createSpan({ text: 'Sync hidden files and folders' });
-			hiddenFilesGroup.createDiv({
-				cls: 'syncthing-help-text',
-				text: 'Enable to sync .obsidian and other hidden files. Requires vault in Files app accessible location.'
-			});
-
-			// Auto-save hidden files setting
-			hiddenFilesInput.addEventListener('change', async () => {
-				this.plugin.settings.allowHiddenFiles = hiddenFilesInput.checked;
-				await this.plugin.saveSettings();
-			});
-
-			// Add iOS guidance
-			const iosGuidanceDiv = iosSection.createDiv('syncthing-form-group');
-			iosGuidanceDiv.createEl('h4', { text: 'iOS Setup Guide:' });
-			const guidanceList = iosGuidanceDiv.createEl('ul');
-			guidanceList.createEl('li', { text: 'Ensure your vault is in a Files app accessible location (iCloud Drive, On My iPhone/iPad)' });
-			guidanceList.createEl('li', { text: 'Configure the remote Syncthing URL to point to your server/desktop instance' });
-			guidanceList.createEl('li', { text: 'Verify all devices use the same encryption settings to avoid sync conflicts' });
-			guidanceList.createEl('li', { text: 'Use the same folder configuration across all devices' });
-		}
-
-		// Encryption Fix Tools Section
-		const fixSection = container.createDiv('syncthing-section');
-		fixSection.createEl('h3', { cls: 'syncthing-section-title', text: '🔧 Encryption Fix Tools' });
-		fixSection.createDiv({
-			cls: 'syncthing-section-description',
-			text: 'Tools to diagnose and fix encryption-related sync errors.'
-		});
-
-		const fixEncryptionBtn = fixSection.createEl('button', {
-			cls: 'syncthing-btn secondary',
-			text: '🔍 Check & Fix Encryption Mismatch'
-		});
-		fixEncryptionBtn.addEventListener('click', async () => {
-			new Notice('Checking for encryption mismatches...', 3000);
-			const success = await this.plugin.checkAndFixEncryptionMismatch();
-			if (success) {
-				new Notice('✅ Encryption settings checked and synchronized across devices', 5000);
-			} else {
-				new Notice('❌ Failed to check encryption settings. Check your API key and connection.', 5000);
-			}
-		});
-
-		const removeHardcodedBtn = fixSection.createEl('button', {
-			cls: 'syncthing-btn secondary',
-			text: '🧹 Remove Hardcoded Encryption'
-		});
-		removeHardcodedBtn.addEventListener('click', async () => {
-			new Notice('Removing hardcoded encryption settings...', 3000);
-			const success = await this.plugin.removeHardcodedEncryption();
-			if (success) {
-				new Notice('✅ Hardcoded encryption removed. All encryption is now configurable via plugin settings.', 5000);
-			} else {
-				new Notice('❌ Failed to remove hardcoded encryption. Check your API key and connection.', 5000);
-			}
-		});
-
 		// Save button (now redundant since all fields auto-save, but keeping for user feedback)
 		const saveBtn = container.createEl('button', {
 			cls: 'syncthing-btn primary',
@@ -3607,18 +3577,15 @@ class SettingTab extends PluginSettingTab {
 		saveBtn.addEventListener('click', async () => {
 			// Force save all current values (though they should already be saved)
 			this.plugin.settings.syncthingApiKey = apiKeyInput.value;
-			this.plugin.settings.vaultFolderID = folderIdInput.value;
 			this.plugin.settings.remoteUrl = remoteUrlInput.value;
 			this.plugin.settings.startOnObsidianOpen = autoStartInput.checked;
 			this.plugin.settings.stopOnObsidianClose = autoStopInput.checked;
-			this.plugin.settings.encryptionEnabled = encryptionEnabledInput.checked;
-			this.plugin.settings.encryptionPassword = encryptionPasswordInput.value;
 
 			// Only save Docker setting on desktop
 			if (!this.plugin.detectMobilePlatform()) {
 				// Find the docker input if it exists
 				const dockerInput = container.querySelector('input[type="checkbox"]');
-				if (dockerInput && dockerInput !== autoStartInput && dockerInput !== autoStopInput && dockerInput !== encryptionEnabledInput) {
+				if (dockerInput && dockerInput !== autoStartInput && dockerInput !== autoStopInput) {
 					this.plugin.settings.useDocker = (dockerInput as HTMLInputElement).checked;
 				}
 			}
@@ -4082,18 +4049,26 @@ class SettingTab extends PluginSettingTab {
 				if (selectedPath) {
 					this.plugin.settings.selectedVaultPath = selectedPath;
 					await this.plugin.saveSettings();
-					new Notice(`Selected folder: ${selectedPath}`, 5000);
-					// Refresh the file manager view
+					new Notice(`Folder processed successfully! Found ${Object.keys(this.plugin.settings.syncedFiles).length} items.`, 5000);
+					// Clear the container and re-render to show the updated file tree
+					container.empty();
 					this.renderFileManagerTab(container);
 				} else {
-					new Notice('No folder selected', 3000);
+					new Notice('No folder selected or processing failed', 3000);
 				}
 			});
 			
-			if (this.plugin.settings.selectedVaultPath) {
-				pickerSection.createDiv({
-					cls: 'syncthing-help-text',
-					text: `Selected: ${this.plugin.settings.selectedVaultPath}`
+			// Show folder status
+			const statusDiv = pickerSection.createDiv('syncthing-info-card');
+			if (this.plugin.settings.selectedVaultPath && Object.keys(this.plugin.settings.syncedFiles).length > 0) {
+				statusDiv.createEl('div', {
+					cls: 'syncthing-info-text',
+					text: `✅ Folder: ${this.plugin.settings.selectedVaultPath} (${Object.keys(this.plugin.settings.syncedFiles).length} items)`
+				});
+			} else {
+				statusDiv.createEl('div', {
+					cls: 'syncthing-info-text',
+					text: '⚠️ No folder selected - use the button above to select your vault folder'
 				});
 			}
 		}
