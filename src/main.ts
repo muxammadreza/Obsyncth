@@ -41,18 +41,6 @@ function detectMobilePlatform(): boolean {
 	return false;
 }
 
-// Polyfill for AbortSignal.timeout if not available
-function createTimeoutSignal(timeout: number): AbortSignal {
-	if (typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal) {
-		return (AbortSignal as any).timeout(timeout);
-	}
-	
-	// Fallback implementation
-	const controller = new AbortController();
-	setTimeout(() => controller.abort(), timeout);
-	return controller.signal;
-}
-
 // Conditional imports for desktop-only functionality
 let spawn: any, exec: any, readFileSync: any, writeFileSync: any, http: any;
 let fs: any, path: any, childProcess: any, treeKill: any, https: any, urlModule: any;
@@ -336,10 +324,10 @@ class SyncthingMonitor extends EventEmitter {
 			}
 		};
 
-		const req = http.request(options, (res: any) => {
+		const req = http.request(options, (res) => {
 			let body = '';
 
-			res.on('data', (chunk: any) => {
+			res.on('data', chunk => {
 				body += chunk;
 			});
 
@@ -388,7 +376,7 @@ class SyncthingMonitor extends EventEmitter {
 			});
 		});
 
-		req.on('error', (err: any) => {
+		req.on('error', (err) => {
 			console.error('Syncthing connection error:', err);
 			this.status = "Connection error";
 			this.setStatusIcon('❌');
@@ -479,10 +467,10 @@ class SyncthingMonitor extends EventEmitter {
 			}
 		};
 
-		const req = http.request(options, (res: any) => {
+		const req = http.request(options, (res) => {
 			let body = '';
 
-			res.on('data', (chunk: any) => {
+			res.on('data', chunk => {
 				body += chunk;
 			});
 
@@ -524,7 +512,7 @@ class SyncthingMonitor extends EventEmitter {
 			});
 		});
 
-		req.on('error', (err: any) => {
+		req.on('error', (err) => {
 			console.error('Syncthing connections API error:', err);
 		});
 
@@ -553,12 +541,12 @@ class SyncthingMonitor extends EventEmitter {
 				timeout: 2000, // 2 second timeout
 			};
 
-			const req = http.request(options, (res: any) => {
+			const req = http.request(options, (res) => {
 				// If we get any response, Syncthing is running
 				resolve(true);
 			});
 
-			req.on('error', (err: any) => {
+			req.on('error', (err) => {
 				console.log('Syncthing connection error:', err.message);
 				// ECONNREFUSED means definitely not running
 				if (err.message.includes('ECONNREFUSED')) {
@@ -679,7 +667,7 @@ class SyncthingMonitor extends EventEmitter {
 				method: 'GET',
 				headers: this.createAuthHeaders(),
 				// Add a timeout using AbortController
-				signal: createTimeoutSignal(5000) // 5 second timeout
+				signal: AbortSignal.timeout(5000) // 5 second timeout
 			});
 			
 			return response.ok;
@@ -805,7 +793,7 @@ export default class Obsyncth extends Plugin {
 		this.monitor.startMonitoring(this.settings, this.setStatusIcon, baseUrl, isMobileMode);
 
 		// Listen for status updates
-		this.monitor.on('status-update', (data: any) => {
+		this.monitor.on('status-update', (data) => {
 			// Update status bar with real-time information
 			this.updateStatusBarFromMonitor(data);
 		});
@@ -1202,9 +1190,9 @@ export default class Obsyncth extends Plugin {
 				}
 			};
 
-			const req = http.request(options, (res: any) => {
+			const req = http.request(options, (res) => {
 				let body = '';
-				res.on('data', (chunk: any) => body += chunk);
+				res.on('data', chunk => body += chunk);
 				res.on('end', () => {
 					try {
 						resolve(JSON.parse(body));
@@ -1256,7 +1244,7 @@ export default class Obsyncth extends Plugin {
 				}
 			};
 
-			const req = http.request(options, (res: any) => {
+			const req = http.request(options, (res) => {
 				resolve(res.statusCode === 200);
 			});
 
@@ -1486,7 +1474,7 @@ export default class Obsyncth extends Plugin {
 				method: 'GET',
 				headers: this.createAuthHeaders(),
 				// Add a timeout using AbortController
-				signal: createTimeoutSignal(5000) // 5 second timeout
+				signal: AbortSignal.timeout(5000) // 5 second timeout
 			});
 			
 			return response.ok;
@@ -2414,9 +2402,9 @@ export default class Obsyncth extends Plugin {
 				}
 			};
 
-			const req = http.request(options, (res: any) => {
+			const req = http.request(options, (res) => {
 				let body = '';
-				res.on('data', (chunk: any) => body += chunk);
+				res.on('data', chunk => body += chunk);
 				res.on('end', () => {
 					try {
 						const data = JSON.parse(body);
@@ -2432,7 +2420,7 @@ export default class Obsyncth extends Plugin {
 				});
 			});
 
-			req.on('error', (error: any) => {
+			req.on('error', (error) => {
 				console.error('Failed to get last sync date:', error);
 				resolve(null);
 			});
